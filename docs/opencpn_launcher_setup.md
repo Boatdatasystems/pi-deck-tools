@@ -21,18 +21,24 @@ The [OpenCPN Launcher Plugin](https://opencpn-manuals.github.io/main/opencpn-plu
 ### Command Template
 
 ```bash
-DISPLAY=:0 python3 /home/pi/pi-deck-tools/apps/maidenhead.py
+/home/pi/pi-deck-tools/launch_pi_app.sh maidenhead
 ```
 
-> `DISPLAY=:0` ensures the tkinter window opens in the VNC X session rather than trying to open on a non-existent display. Adjust `:0` to match your VNC display number (check with `echo $DISPLAY` inside VNC terminal).
+> Do not force `DISPLAY` unless needed. On some setups, OpenCPN already provides the correct display context and forcing `:0` breaks launch behavior.
 
 ## Tool Commands
 
 | Tool | Command |
 |---|---|
-| Maidenhead Grid | `DISPLAY=:0 python3 /home/pi/pi-deck-tools/apps/maidenhead.py` |
-| HiFiBerry Volume | `DISPLAY=:0 python3 /home/pi/pi-deck-tools/apps/hifiberry_volume.py` |
-| Sun/Moon | `DISPLAY=:0 python3 /home/pi/pi-deck-tools/apps/sun_moon.py` |
+| Maidenhead Grid | `/home/pi/pi-deck-tools/launch_pi_app.sh maidenhead` |
+| HiFiBerry Volume | `/home/pi/pi-deck-tools/launch_pi_app.sh hifiberry_volume` |
+| Sun/Moon | `/home/pi/pi-deck-tools/launch_pi_app.sh sun_moon` |
+
+If a specific display must be forced on your Pi, use:
+
+```bash
+PI_DECK_DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh maidenhead
+```
 
 ## Notes
 

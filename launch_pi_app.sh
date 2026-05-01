@@ -9,12 +9,11 @@ set -euo pipefail
 #   bash launch_pi_app.sh sun_moon
 #
 # Optional:
-#   DISPLAY=:0 bash launch_pi_app.sh maidenhead
+#   PI_DECK_DISPLAY=:0 bash launch_pi_app.sh maidenhead
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_PY="$PROJECT_DIR/.venv/bin/python"
 APPS_DIR="$PROJECT_DIR/apps"
-DISPLAY_VALUE="${DISPLAY:-:0}"
 
 if [ $# -ne 1 ]; then
   echo "Usage: bash launch_pi_app.sh <maidenhead|hifiberry_volume|sun_moon>"
@@ -36,5 +35,9 @@ if [ ! -f "$APP_PATH" ]; then
   exit 1
 fi
 
-export DISPLAY="$DISPLAY_VALUE"
+# Keep OpenCPN's DISPLAY by default. Only override when explicitly requested.
+if [ -n "${PI_DECK_DISPLAY:-}" ]; then
+  export DISPLAY="$PI_DECK_DISPLAY"
+fi
+
 exec "$VENV_PY" "$APP_PATH"

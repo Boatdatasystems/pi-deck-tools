@@ -27,10 +27,6 @@ These are candidates — priority TBD:
 
 | Tool | Description |
 |---|---|
-| `anchor_watch.py` | Monitor distance from drop point, alert if dragging |
-| `tide_times.py` | Fetch tide predictions for current position (Admiralty / open API) |
-| `ais_summary.py` | Show nearby AIS targets from Signal K in a simple list |
-| `barograph.py` | Plot pressure history from Signal K over last N hours |
 | `nmea_monitor.py` | Raw NMEA sentence display for diagnostics |
 | `waypoint_list.py` | Read and display active route waypoints from OpenCPN navobj.db |
 | `vhf_channels.py` | Quick reference for VHF marine channels with search |

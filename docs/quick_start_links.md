@@ -3,7 +3,8 @@
 ## Short Notes
 
 - `DISPLAY=:0` tells GUI apps (tkinter) which X display to open on.
-- Use `:0` for the main Raspberry Pi desktop/VNC session in most setups.
+- Default: do not force `DISPLAY` from OpenCPN launcher if it already works.
+- If needed, set `PI_DECK_DISPLAY=:0` when calling `launch_pi_app.sh`.
 - If launcher buttons do nothing, test in terminal with `echo $DISPLAY`.
 - Always run apps through the project venv on the Pi: `.venv/bin/python`.
 
@@ -14,9 +15,12 @@
 bash setup_pi_venv.sh
 
 # Launch apps through venv wrapper
-DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh maidenhead
-DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh hifiberry_volume
-DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh sun_moon
+/home/pi/pi-deck-tools/launch_pi_app.sh maidenhead
+/home/pi/pi-deck-tools/launch_pi_app.sh hifiberry_volume
+/home/pi/pi-deck-tools/launch_pi_app.sh sun_moon
+
+# Only if display override is required on your setup
+PI_DECK_DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh maidenhead
 
 # Check active display in your current session
 echo $DISPLAY
@@ -25,9 +29,9 @@ echo $DISPLAY
 ## OpenCPN Launcher Commands
 
 ```bash
-DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh maidenhead
-DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh hifiberry_volume
-DISPLAY=:0 /home/pi/pi-deck-tools/launch_pi_app.sh sun_moon
+/home/pi/pi-deck-tools/launch_pi_app.sh maidenhead
+/home/pi/pi-deck-tools/launch_pi_app.sh hifiberry_volume
+/home/pi/pi-deck-tools/launch_pi_app.sh sun_moon
 ```
 
 ## Key Links
