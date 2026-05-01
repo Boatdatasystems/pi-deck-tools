@@ -4,7 +4,7 @@
 
 A collection of Python/tkinter utility tools for use aboard a small boat, launched from the **OpenCPN Launcher Plugin** on a Raspberry Pi 5 running inside VNC.
 
-> **Note:** This entire repository — structure, code, and documentation — was created using [GitHub Copilot](https://github.com/features/copilot), with instructions given almost entirely via Windows Speech to Text. No keyboard required.
+> **Note:** This entire repository — structure, code, and documentation — was created using [GitHub Copilot](https://github.com/features/copilot), with instructions given almost entirely via Windows Speech to Text. No keyboard required. (OK, maybe a little mouse and keyboard now and then.)
 
 ## Tools
 
