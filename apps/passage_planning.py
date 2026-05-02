@@ -111,6 +111,7 @@ class PassagePlanningTool(VNCToolWindow):
             "WvDir°",
             "WvAng°",
             "WvHt m",
+            "WvPer s",
         ]
         self.twa_column_index = 9
         # Timeline slider state
@@ -177,7 +178,7 @@ class PassagePlanningTool(VNCToolWindow):
         self.plan_sheet.enable_bindings()
         self.plan_sheet.pack(fill=tk.BOTH, expand=True)
 
-        self._sheet_set_column_widths([130, 115, 88, 88, 68, 70, 82, 58, 58, 58, 58, 58, 60, 60, 60])
+        self._sheet_set_column_widths([130, 115, 88, 88, 68, 70, 82, 58, 58, 58, 58, 58, 60, 60, 60, 60])
 
         # --- GRIB timeline slider -------------------------------------------
         slider_outer = tk.Frame(self.content_frame, bg=self.COLOR_BG)
@@ -305,7 +306,7 @@ class PassagePlanningTool(VNCToolWindow):
                     f"{waypoint['lon']:.4f}",
                     "--", "--", "--",
                     "--", "--", "--", "--", "--",
-                    "--", "--", "--",
+                    "--", "--", "--", "--",
                 ),
             )
 
@@ -522,14 +523,15 @@ class PassagePlanningTool(VNCToolWindow):
         except Exception:
             return "--", "--", "--", "--", "--"
 
-    def _wave_columns(self, lat: float, lon: float, time_utc: datetime, course_deg: float) -> tuple[str, str, str]:
-        """Return (wv_dir, wv_ang, wv_ht) strings, allowing height-only GRIBs."""
+    def _wave_columns(self, lat: float, lon: float, time_utc: datetime, course_deg: float) -> tuple[str, str, str, str]:
+        """Return (wv_dir, wv_ang, wv_ht, wv_per) strings, allowing partial wave GRIBs."""
         if self.grib_reader is None:
-            return "--", "--", "--"
+            return "--", "--", "--", "--"
 
         wv_dir_text = "--"
         wv_ang_text = "--"
         wv_ht_text = "--"
+        wv_per_text = "--"
 
         try:
             if self.grib_reader.has_wave_height:
@@ -550,7 +552,15 @@ class PassagePlanningTool(VNCToolWindow):
         except Exception:
             pass
 
-        return wv_dir_text, wv_ang_text, wv_ht_text
+        try:
+            if self.grib_reader.has_wave_period:
+                p = self.grib_reader.wave_period_at(lat, lon, time_utc)
+                if math.isfinite(p):
+                    wv_per_text = f"{p:.0f}"
+        except Exception:
+            pass
+
+        return wv_dir_text, wv_ang_text, wv_ht_text, wv_per_text
 
     def row_for_distance(self, segments: list[dict], run_nm: float, total_nm: float, time_utc: datetime, speed_kn: float = 5.0) -> tuple:
         for segment in segments:
@@ -565,7 +575,7 @@ class PassagePlanningTool(VNCToolWindow):
                 start_name = segment["start"].get("name") or f"WP {segment['start'].get('sequence', '?')}"
                 end_name = segment["end"].get("name") or f"WP {segment['end'].get('sequence', '?')}"
                 twd, tws, twa, aws, awa = self._wind_columns(lat, lon, time_utc, segment["bearing_deg"], speed_kn)
-                wvdir, wvang, wvht = self._wave_columns(lat, lon, time_utc, segment["bearing_deg"])
+                wvdir, wvang, wvht, wvper = self._wave_columns(lat, lon, time_utc, segment["bearing_deg"])
                 return (
                     time_utc.strftime("%Y-%m-%d %H:%M"),
                     f"{start_name}->{end_name}",
@@ -575,7 +585,7 @@ class PassagePlanningTool(VNCToolWindow):
                     f"{run_nm:.1f}",
                     f"{max(0.0, total_nm - run_nm):.1f}",
                     twd, tws, twa, aws, awa,
-                    wvdir, wvang, wvht,
+                    wvdir, wvang, wvht, wvper,
                 )
 
         final = segments[-1]
@@ -583,7 +593,7 @@ class PassagePlanningTool(VNCToolWindow):
         lon = final["end"]["lon"]
         end_name = final["end"].get("name") or f"WP {final['end'].get('sequence', '?')}"
         twd, tws, twa, aws, awa = self._wind_columns(lat, lon, time_utc, final["bearing_deg"], speed_kn)
-        wvdir, wvang, wvht = self._wave_columns(lat, lon, time_utc, final["bearing_deg"])
+        wvdir, wvang, wvht, wvper = self._wave_columns(lat, lon, time_utc, final["bearing_deg"])
         return (
             time_utc.strftime("%Y-%m-%d %H:%M"),
             end_name,
@@ -593,7 +603,7 @@ class PassagePlanningTool(VNCToolWindow):
             f"{total_nm:.1f}",
             "0.0",
             twd, tws, twa, aws, awa,
-            wvdir, wvang, wvht,
+            wvdir, wvang, wvht, wvper,
         )
 
     def route_total_nm(self, waypoints: list[dict]) -> float:

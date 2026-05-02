@@ -135,8 +135,8 @@ bash setup_pi_venv.sh        # installs libeccodes, creates .venv, pip installs 
 - [ ] `docs/images/` screenshot not yet committed
 - [ ] ROADMAP.md may be out of date
 - [ ] `opencpn_db_probe.py` is a dev utility — consider moving to `tools/` or `dev/`
-- [ ] Passage planning: manual Departure UTC entry does not snap to GRIB times (slider does; text entry doesn't yet)
-- [ ] Wave period column (`mpww`) available in GRIB but not yet shown in table
+- [x] Passage planning: manual Departure UTC entry snaps to nearest GRIB step on Build
+- [x] Wave period column (`mpww`) now shown in table as `WvPer s`
 
 ---
 

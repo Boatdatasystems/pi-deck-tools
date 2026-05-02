@@ -92,6 +92,7 @@ class GribReader:
         self._wave_lons: "np.ndarray | None" = None
         self._swh: "np.ndarray | None" = None   # significant wave height (m)
         self._mwd: "np.ndarray | None" = None   # mean wave direction (°, meteorological FROM)
+        self._mpww: "np.ndarray | None" = None  # mean period of wind waves (s)
         self._wave_times: list[datetime] = []
         self.valid_times: list[datetime] = []
         self.lat_min = self.lat_max = self.lon_min = self.lon_max = 0.0
@@ -183,6 +184,7 @@ class GribReader:
         """
         SWH_NAMES = ["swh", "shww", "htsgw", "HTSGW"]
         MWD_NAMES = ["mwd", "mdww", "mwavd", "wvdir", "WVDIR", "dirpw", "dirsw"]
+        MPW_NAMES = ["mpww", "mpts", "perpw", "mwp"]
 
         def _try_load(short_names):
             for name in short_names:
@@ -202,6 +204,7 @@ class GribReader:
 
         ds_swh = _try_load(SWH_NAMES)
         ds_mwd = _try_load(MWD_NAMES)
+        ds_mpw = _try_load(MPW_NAMES)
 
         if ds_swh is None:
             return  # No usable wave-height field in this GRIB
@@ -265,9 +268,20 @@ class GribReader:
                 self._mwd = mwd_raw[order]
             else:
                 self._mwd = None
+
+            if ds_mpw is not None:
+                mpw_var = next(iter(ds_mpw.data_vars))
+                mpw_raw = ds_mpw[mpw_var].values
+                ds_mpw.close()
+                if mpw_raw.ndim == 2:
+                    mpw_raw = mpw_raw[np.newaxis]
+                self._mpww = mpw_raw[order]
+            else:
+                self._mpww = None
         except Exception:
             self._swh = None
             self._mwd = None
+            self._mpww = None
             self._wave_times = []
 
     @property
@@ -277,6 +291,10 @@ class GribReader:
     @property
     def has_wave_direction(self) -> bool:
         return self._mwd is not None and len(self._wave_times) > 0
+
+    @property
+    def has_wave_period(self) -> bool:
+        return self._mpww is not None and len(self._wave_times) > 0
 
     @property
     def has_waves(self) -> bool:
@@ -380,6 +398,16 @@ class GribReader:
 
         return float(self._mwd[time_idx, lat_i, lon_i])
 
+    def _wave_period_at_index(self, time_idx: int, lat: float, lon: float) -> float:
+        """Nearest-grid-point mean wave period (s) at a given wave time index."""
+        import numpy as np
+
+        lon_q = lon + 360.0 if (self._wave_lons.min() >= 0.0 and lon < 0.0) else lon
+        lat_i = int(np.argmin(np.abs(self._wave_lats - lat)))
+        lon_i = int(np.argmin(np.abs(self._wave_lons - lon_q)))
+
+        return float(self._mpww[time_idx, lat_i, lon_i])
+
     def _time_interp_scalar(self, times: list[datetime], time_utc: datetime, at_index) -> float:
         """Linear interpolation helper for scalar fields over time."""
         n = len(times)
@@ -437,6 +465,19 @@ class GribReader:
             self._wave_times,
             time_utc,
             lambda idx: self._wave_dir_at_index(idx, lat, lon),
+        )
+
+    def wave_period_at(self, lat: float, lon: float, time_utc: datetime) -> float:
+        """Return mean wave period (seconds)."""
+        if not self.has_wave_period:
+            raise ValueError("No wave period data in this GRIB file.")
+        if time_utc.tzinfo is None:
+            time_utc = time_utc.replace(tzinfo=timezone.utc)
+
+        return self._time_interp_scalar(
+            self._wave_times,
+            time_utc,
+            lambda idx: self._wave_period_at_index(idx, lat, lon),
         )
 
     def wave_at(
