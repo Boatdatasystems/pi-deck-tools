@@ -8,6 +8,14 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$PROJECT_DIR/.venv"
 
+# ecCodes system library — required for cfgrib (GRIB weather file reading)
+if ! dpkg -s libeccodes-dev >/dev/null 2>&1; then
+  echo "Installing libeccodes system packages..."
+  sudo apt install -y libeccodes-dev libeccodes-tools
+else
+  echo "libeccodes already installed, skipping."
+fi
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 not found. Install Python 3 first."
   exit 1

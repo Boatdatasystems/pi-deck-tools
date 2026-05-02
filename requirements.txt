@@ -21,3 +21,12 @@ Pillow>=10.0
 
 # tkinter is part of Python stdlib — ensure python3-tk is installed on the Pi:
 # sudo apt install python3-tk
+
+# GRIB weather file reading (passage planning)
+# Requires system ecCodes library on the Pi first:
+#   sudo apt install libeccodes-dev libeccodes-tools
+# Then install Python packages:
+#   pip install cfgrib xarray scipy
+cfgrib>=0.9.10
+xarray>=2023.1
+scipy>=1.11
