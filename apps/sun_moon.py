@@ -47,6 +47,8 @@ DB_PATH = "/home/pi/.opencpn/navobj.db"
 DATA_DIR = str(Path(__file__).parent.parent / "data")
 EPH_FILE = "de421.bsp"
 COORD_PRECISION = 4
+DEFAULT_CHART_MAX_MAG = 3.0
+CHART_DATA_MAX_MAG = 5.0
 
 class CelestialCalculator(VNCToolWindow):
     """Sun/Moon celestial navigation tool using VNC window template."""
@@ -67,6 +69,10 @@ class CelestialCalculator(VNCToolWindow):
         self.earth = self.eph['earth']
         
         self.using_waypoint = False
+        self.last_report_text = None
+        self.last_chart_payload = None
+        self.chart_window = None
+        self.result_window = None
         
         self.setup_ui()
 
@@ -171,6 +177,55 @@ class CelestialCalculator(VNCToolWindow):
         tk.Button(btn_frame, text="Use Sun Waypoint", command=self.get_waypoint_pos).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Calculate", command=self.calculate, bg="green", fg="white").pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="Brightest Stars", command=self.calculate_stars, bg="blue", fg="white").pack(side=tk.LEFT, padx=5)
+        self.export_pdf_btn = tk.Button(btn_frame, text="Export PDF", command=self.export_latest_pdf, state=tk.DISABLED)
+        self.export_pdf_btn.pack(side=tk.LEFT, padx=5)
+
+    def get_dual_window_layout(self):
+        """Return side-by-side window geometry similar to the VNC screenshot layout."""
+        self.update_idletasks()
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+
+        margin = 10
+        gap = 8
+        top_offset = 34
+        bottom_reserve = 24
+        # Keep title bars clear of the VNC top strip and leave room at bottom.
+        usable_h = max(460, int((screen_h - top_offset - bottom_reserve) * 0.90))
+
+        right_w = max(380, min(470, int(screen_w * 0.32)))
+        left_w = screen_w - right_w - gap - (2 * margin)
+
+        if left_w < 700:
+            left_w = 700
+            right_w = max(320, screen_w - left_w - gap - (2 * margin))
+
+        left = {
+            'x': margin,
+            'y': top_offset,
+            'w': max(700, left_w),
+            'h': usable_h,
+        }
+        right = {
+            'x': left['x'] + left['w'] + gap,
+            'y': top_offset,
+            'w': max(320, right_w),
+            'h': usable_h,
+        }
+
+        return {'left': left, 'right': right}
+
+    def export_latest_pdf(self):
+        """Export the most recent report to PDF on demand."""
+        if not self.last_report_text:
+            self.show_info("Nothing to Export", "Run Calculate or Brightest Stars first.")
+            return
+
+        pdf_filename = self.export_to_pdf(self.last_report_text)
+        if pdf_filename:
+            self.show_info("PDF Exported", f"Saved to:\n{os.path.abspath(pdf_filename)}")
+        else:
+            self.show_error("PDF Export Failed", "Could not create PDF file.")
 
     def parse_position(self):
         """Parse position from entry field."""
@@ -244,6 +299,10 @@ class CelestialCalculator(VNCToolWindow):
         res += f"\n{twilight_text}"
         res += f"\n{rise_set_text}"
         res += f"\n{meridian_text}"
+
+        self.last_report_text = res
+        self.last_chart_payload = None
+        self.export_pdf_btn.config(state=tk.NORMAL)
 
         self.withdraw()
         self.show_results(res)
@@ -351,10 +410,9 @@ class CelestialCalculator(VNCToolWindow):
 
         return MplPath(rotated, codes)
 
-    def plot_constellation_lines(self, ax, observer, time, data_json):
-        """Draw constellation lines on the circular all-sky chart."""
+    def get_constellation_segments(self, observer, time):
+        """Compute visible constellation line segments in polar coordinates."""
         try:
-            import json
             from skyfield.api import Star
             from skyfield.data import hipparcos
             
@@ -384,7 +442,7 @@ class CelestialCalculator(VNCToolWindow):
                     if alt.degrees > 0:
                         hip_positions[hip_num] = (az.degrees, alt.degrees)
             
-            # Draw constellation lines
+            segments = []
             for const_name, lines in constellations.items():
                 for hip1, hip2 in lines:
                     if hip1 in hip_positions and hip2 in hip_positions:
@@ -397,13 +455,20 @@ class CelestialCalculator(VNCToolWindow):
 
                         theta1, radius1 = self.az_alt_to_polar(az1, alt1)
                         theta2, radius2 = self.az_alt_to_polar(az2, alt2)
+                        segments.append(((theta1, radius1), (theta2, radius2)))
 
-                        ax.plot([theta1, theta2], [radius1, radius2], 
-                               color='cyan', alpha=0.22, linewidth=0.8, 
-                               linestyle='--', zorder=2)
+            return segments
             
         except Exception as e:
             print(f"Constellation lines error: {e}")
+            return []
+
+    def plot_constellation_lines(self, ax, segments, alpha=0.22):
+        """Draw constellation lines on the circular all-sky chart."""
+        for (theta1, radius1), (theta2, radius2) in segments:
+            ax.plot([theta1, theta2], [radius1, radius2],
+                    color='cyan', alpha=max(0.05, min(1.0, alpha)), linewidth=0.8,
+                    linestyle='--', zorder=2)
 
     def setup_polar_chart_axes(self, ax, period, time_str, compact=False, heading_degrees=None):
         """Configure a circular all-sky chart with compass orientation."""
@@ -456,9 +521,10 @@ class CelestialCalculator(VNCToolWindow):
             ax.text(0, 6, 'Boat', fontsize=8 if compact else 9,
                 color='deepskyblue', ha='center', va='center', weight='bold')
 
-    def plot_sky_objects(self, ax, data, compact=False):
+    def plot_sky_objects(self, ax, data, compact=False, max_mag=DEFAULT_CHART_MAX_MAG, star_alpha=1.0):
         """Plot stars, sun, and moon on the circular sky chart."""
         labels_added = set()
+        star_alpha = max(0.1, min(1.0, star_alpha))
         label_sizes = {
             'bold': 7 if compact else 8,
             'bright': 6 if compact else 7,
@@ -480,6 +546,11 @@ class CelestialCalculator(VNCToolWindow):
             alt = item['alt']
             name = item['name']
             star_type = item['type']
+
+            # Allow dynamic star density control while keeping Sun/Moon visible.
+            if star_type in ('bold', 'bright', 'medium') and item.get('mag', 99) > max_mag:
+                continue
+
             theta, radius = self.az_alt_to_polar(az, alt)
 
             if star_type in ('bold', 'bright', 'medium'):
@@ -489,22 +560,24 @@ class CelestialCalculator(VNCToolWindow):
                 ax.text(theta, label_radius, name,
                         fontsize=label_sizes[star_type], color=label_color,
                         ha='center', va='center', weight=label_weight,
-                        alpha=0.95 if star_type != 'medium' else 0.75, zorder=11)
+                        alpha=(0.95 if star_type != 'medium' else 0.75) * star_alpha, zorder=11)
 
             if star_type == 'bold':
                 ax.scatter(theta, radius, s=marker_sizes['bold'], marker='*', color='gold',
                            edgecolors='orange', linewidths=1.4, zorder=10,
+                           alpha=star_alpha,
                            label='Top 5 Stars' if 'bold' not in labels_added else None)
                 labels_added.add('bold')
             elif star_type == 'bright':
                 ax.scatter(theta, radius, s=marker_sizes['bright'], marker='o', color='white',
                            edgecolors='gray', linewidths=0.9, zorder=5,
+                           alpha=star_alpha,
                            label='Bright Reference' if 'bright' not in labels_added else None)
                 labels_added.add('bright')
             elif star_type == 'medium':
                 ax.scatter(theta, radius, s=marker_sizes['medium'], marker='o', color='lightgray',
                            edgecolors='darkgray', linewidths=0.4, zorder=3,
-                           alpha=0.9, label=None)
+                           alpha=0.9 * star_alpha, label=None)
             elif star_type == 'moon':
                 ax.scatter(theta, radius, s=marker_sizes['moon'], marker='D', color='orange',
                            edgecolors='gold', linewidths=1.4, zorder=8,
@@ -555,7 +628,7 @@ class CelestialCalculator(VNCToolWindow):
             with self.load.open(hipparcos.URL) as f:
                 df = hipparcos.load_dataframe(f)
 
-            df_chart = df[df['magnitude'] <= 2.2].copy()
+            df_chart = df[df['magnitude'] <= CHART_DATA_MAX_MAG].copy()
             df_chart = df_chart[df_chart['ra_degrees'].notnull()]
 
             df_table = df[df['magnitude'] <= 1.5].copy()
@@ -666,10 +739,17 @@ class CelestialCalculator(VNCToolWindow):
             res += f"      Center = zenith above the boat, outer ring = horizon.\n"
             res += f"      Only the key stars, Sun, and Moon are labelled."
 
-            self.withdraw()
-            self.show_results(res)
+            self.last_report_text = res
+            self.last_chart_payload = {
+                'current_json': json.dumps(current_data) if current_data else None,
+                'time_str': t.utc_strftime('%H:%M UTC'),
+                'heading_degrees': heading_deg,
+            }
+            self.export_pdf_btn.config(state=tk.NORMAL)
 
-            current_json = json.dumps(current_data) if current_data else None
+            self.withdraw()
+
+            current_json = self.last_chart_payload['current_json']
             if current_data:
                 self.create_twilight_chart(
                     current_json,
@@ -680,33 +760,222 @@ class CelestialCalculator(VNCToolWindow):
                     heading_degrees=heading_deg
                 )
 
-            pdf_filename = self.export_to_pdf(res)
-            if pdf_filename:
-                print(f"\n✓ PDF saved to: {os.path.abspath(pdf_filename)}")
-
         except Exception as e:
             import traceback
             messagebox.showerror("Star Calculation Error", f"Error calculating stars:\n{e}\n\n{traceback.format_exc()}")
 
     def create_twilight_chart(self, data_json, period, time_str, observer, time, heading_degrees=None):
-        """Create circular all-sky chart for dawn or dusk using matplotlib."""
+        """Create circular all-sky chart in a Tk window with native controls."""
         try:
-            import matplotlib
-            matplotlib.use('TkAgg')  # Interactive backend for display
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+            from matplotlib.figure import Figure
             
             data = json.loads(data_json)
-            
-            # Create figure
-            fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={'projection': 'polar'})
-            fig.patch.set_facecolor('#001133')
+            constellation_segments = self.get_constellation_segments(observer, time)
+            self.update_idletasks()
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            top_offset = 34
+            margin = 8
+            chart_w = max(900, screen_w - (2 * margin))
+            chart_h = max(560, screen_h - top_offset - margin)
+            chart_x = margin
+            chart_y = top_offset
 
-            self.setup_polar_chart_axes(ax, period, time_str, compact=False, heading_degrees=heading_degrees)
-            self.plot_sky_objects(ax, data, compact=False)
-            self.plot_constellation_lines(ax, observer, time, data_json)
-            self.add_chart_legend(ax, compact=False)
-            
-            plt.tight_layout()
-            plt.show()
+            if self.chart_window and self.chart_window.winfo_exists():
+                self.chart_window.destroy()
+
+            chart_win = tk.Toplevel(self)
+            chart_win.title("Current Sky Chart")
+            chart_win.geometry(f"{chart_w}x{chart_h}+{chart_x}+{chart_y}")
+            chart_win.minsize(900, 620)
+            chart_win.configure(bg='#001133')
+            chart_win.lift()
+            self.chart_window = chart_win
+
+            outer = tk.Frame(chart_win, bg='#001133')
+            outer.pack(fill=tk.BOTH, expand=True)
+            outer.grid_rowconfigure(0, weight=1)
+            outer.grid_columnconfigure(0, weight=1)
+
+            canvas_frame = tk.Frame(outer, bg='#001133')
+            canvas_frame.grid(row=0, column=0, sticky='nsew', padx=(10, 6), pady=10)
+
+            controls_frame = tk.Frame(outer, bg='#08203f', bd=1, relief=tk.SOLID, highlightbackground='#6bb7ff')
+            controls_frame.grid(row=0, column=1, sticky='ns', padx=(0, 10), pady=10)
+
+            controls_visible = tk.BooleanVar(value=True)
+
+            def toggle_controls():
+                if controls_visible.get():
+                    controls_frame.grid_remove()
+                    controls_visible.set(False)
+                    toggle_btn.config(text='Show Controls')
+                    canvas_frame.grid_configure(padx=(10, 10))
+                else:
+                    controls_frame.grid()
+                    controls_visible.set(True)
+                    toggle_btn.config(text='Hide Controls')
+                    canvas_frame.grid_configure(padx=(10, 6))
+                chart_win.update_idletasks()
+
+            toggle_btn = tk.Button(
+                chart_win,
+                text='Hide Controls',
+                command=toggle_controls,
+                bg='#114a7a',
+                fg='white',
+                activebackground='#1d6aa8',
+                activeforeground='white',
+                relief=tk.FLAT,
+                padx=10,
+                pady=2,
+            )
+            toggle_btn.place(relx=1.0, x=-12, y=8, anchor='ne')
+
+            header_frame = tk.Frame(controls_frame, bg='#08203f')
+            header_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
+            tk.Label(header_frame, text="Chart Controls", bg='#08203f', fg='white',
+                     font=('Helvetica', 10, 'bold')).pack(side=tk.LEFT)
+            tk.Label(header_frame, text="More stars, brightness, view, report", bg='#08203f', fg='#a8d8ff',
+                     font=('Helvetica', 8)).pack(side=tk.RIGHT)
+
+            control_width = 220
+            figure_width = max(7.8, (chart_w - control_width - 26) / 100.0)
+            figure_height = max(5.4, (chart_h - 20) / 100.0)
+            fig = Figure(figsize=(figure_width, figure_height), dpi=100)
+            fig.patch.set_facecolor('#001133')
+            ax = fig.add_subplot(111, projection='polar')
+            fig.subplots_adjust(left=0.04, bottom=0.04, right=0.98, top=0.92)
+
+            canvas = FigureCanvasTkAgg(fig, master=canvas_frame)
+            canvas_widget = canvas.get_tk_widget()
+            canvas_widget.configure(bg='#001133', highlightthickness=0)
+            canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+            toolbar_frame = tk.Frame(controls_frame, bg='#08203f')
+            toolbar_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+            toolbar = NavigationToolbar2Tk(canvas, toolbar_frame, pack_toolbar=False)
+            toolbar.update()
+            toolbar.config(bg='#08203f')
+            toolbar.pack(fill=tk.X)
+
+            mag_var = tk.DoubleVar(value=DEFAULT_CHART_MAX_MAG)
+            star_var = tk.DoubleVar(value=1.0)
+            const_var = tk.DoubleVar(value=0.22)
+            radius_var = tk.DoubleVar(value=90.0)
+            mag_value = tk.StringVar(value=f"{mag_var.get():.1f}")
+            star_value = tk.StringVar(value=f"{star_var.get():.2f}")
+            const_value = tk.StringVar(value=f"{const_var.get():.2f}")
+            radius_value = tk.StringVar(value="Full")
+
+            def draw_scene(max_mag, star_alpha, const_alpha, radius_limit):
+                ax.clear()
+                self.setup_polar_chart_axes(ax, period, time_str, compact=False, heading_degrees=heading_degrees)
+                self.plot_sky_objects(ax, data, compact=False, max_mag=max_mag, star_alpha=star_alpha)
+                self.plot_constellation_lines(ax, constellation_segments, alpha=const_alpha)
+                ax.set_ylim(0, radius_limit)
+                self.add_chart_legend(ax, compact=False)
+
+            def update_chart(*_args):
+                max_mag = round(mag_var.get(), 1)
+                star_alpha = round(star_var.get(), 2)
+                const_alpha = round(const_var.get(), 2)
+                radius_limit = round(radius_var.get(), 1)
+                mag_value.set(f"{max_mag:.1f}")
+                star_value.set(f"{star_alpha:.2f}")
+                const_value.set(f"{const_alpha:.2f}")
+                radius_value.set("Full" if radius_limit >= 89.5 else f"{radius_limit:.0f}°")
+                draw_scene(max_mag=max_mag, star_alpha=star_alpha, const_alpha=const_alpha, radius_limit=radius_limit)
+                canvas.draw()
+
+            def add_scale_row(parent, label_text, variable, value_text, from_, to, resolution, accent):
+                row = tk.Frame(parent, bg='#08203f')
+                row.pack(fill=tk.X, padx=8, pady=1)
+                tk.Label(row, text=label_text, width=11, anchor='w', bg='#08203f', fg='white',
+                         font=('Helvetica', 8, 'bold')).pack(side=tk.TOP, anchor='w')
+                inner = tk.Frame(row, bg='#08203f')
+                inner.pack(fill=tk.X)
+                scale = tk.Scale(
+                    inner,
+                    variable=variable,
+                    from_=from_,
+                    to=to,
+                    resolution=resolution,
+                    orient=tk.HORIZONTAL,
+                    showvalue=0,
+                    length=150,
+                    sliderlength=14,
+                    troughcolor='#16375b',
+                    activebackground=accent,
+                    highlightthickness=0,
+                    bd=0,
+                    bg='#08203f',
+                    fg='white',
+                    font=('Helvetica', 7),
+                    command=lambda _value: update_chart(),
+                )
+                scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+                tk.Label(inner, textvariable=value_text, width=5, anchor='e', bg='#08203f', fg='#d7efff',
+                         font=('Courier', 9, 'bold')).pack(side=tk.RIGHT)
+                return scale
+
+            add_scale_row(controls_frame, 'Max Mag', mag_var, mag_value, 0.5, CHART_DATA_MAX_MAG, 0.1, '#6bb7ff')
+            add_scale_row(controls_frame, 'Star Bright', star_var, star_value, 0.05, 1.0, 0.05, '#f0c419')
+            add_scale_row(controls_frame, 'Const Bright', const_var, const_value, 0.0, 0.8, 0.01, '#00d5e6')
+
+            view_frame = tk.Frame(controls_frame, bg='#08203f')
+            view_frame.pack(fill=tk.X, padx=8, pady=(6, 4))
+            tk.Label(view_frame, text='View', anchor='w', bg='#08203f', fg='white',
+                     font=('Helvetica', 8, 'bold')).pack(anchor='w')
+            tk.Label(view_frame, textvariable=radius_value, anchor='w', bg='#08203f', fg='#d7efff',
+                     font=('Courier', 9, 'bold')).pack(anchor='w', pady=(0, 4))
+
+            buttons_row = tk.Frame(controls_frame, bg='#08203f')
+            buttons_row.pack(fill=tk.X, padx=8, pady=(2, 8))
+
+            def set_radius(new_radius):
+                radius_var.set(max(25.0, min(90.0, new_radius)))
+                update_chart()
+
+            tk.Button(view_frame, text='Zoom In', command=lambda: set_radius(radius_var.get() * 0.82),
+                      bg='#114a7a', fg='white', activebackground='#1d6aa8', activeforeground='white',
+                      relief=tk.FLAT, padx=10, width=10).pack(side=tk.LEFT, padx=(0, 4))
+            tk.Button(view_frame, text='Zoom Out', command=lambda: set_radius(min(90.0, radius_var.get() / 0.82)),
+                      bg='#114a7a', fg='white', activebackground='#1d6aa8', activeforeground='white',
+                      relief=tk.FLAT, padx=10, width=10).pack(side=tk.LEFT)
+
+            def reset_controls():
+                mag_var.set(DEFAULT_CHART_MAX_MAG)
+                star_var.set(1.0)
+                const_var.set(0.22)
+                radius_var.set(90.0)
+                update_chart()
+
+            tk.Button(buttons_row, text='Full Sky', command=lambda: set_radius(90.0),
+                      bg='#0e385c', fg='white', activebackground='#1d6aa8',
+                      activeforeground='white', relief=tk.FLAT, padx=10, width=10).pack(side=tk.LEFT)
+            tk.Button(buttons_row, text='Show Report', command=lambda: self.show_results(self.last_report_text),
+                      bg='#0e385c', fg='white', activebackground='#1d6aa8',
+                      activeforeground='white', relief=tk.FLAT, padx=8, width=11).pack(side=tk.LEFT, padx=(4, 0))
+            tk.Button(buttons_row, text='Reset', command=reset_controls,
+                      bg='#114a7a', fg='white', activebackground='#1d6aa8',
+                      activeforeground='white', relief=tk.FLAT, padx=10, width=10).pack(side=tk.RIGHT)
+
+            def on_chart_close():
+                self.chart_window = None
+                chart_win.destroy()
+                if self.result_window and self.result_window.winfo_exists():
+                    self.result_window.lift()
+                    return
+                if self.state() == 'withdrawn':
+                    # If chart was the last visible UI, close app so terminal returns immediately.
+                    self.destroy()
+                else:
+                    self.deiconify()
+
+            chart_win.protocol("WM_DELETE_WINDOW", on_chart_close)
+            update_chart()
             
         except Exception as e:
             import traceback
@@ -720,14 +989,15 @@ class CelestialCalculator(VNCToolWindow):
             matplotlib.use('Agg')  # Non-interactive backend
             
             data = json.loads(data_json)
+            constellation_segments = self.get_constellation_segments(observer, time)
             
             # Create figure
             fig, ax = plt.subplots(figsize=(8.5, 8.5), subplot_kw={'projection': 'polar'})
             fig.patch.set_facecolor('#001133')
 
             self.setup_polar_chart_axes(ax, period, time_str, compact=True, heading_degrees=heading_degrees)
-            self.plot_sky_objects(ax, data, compact=True)
-            self.plot_constellation_lines(ax, observer, time, data_json)
+            self.plot_sky_objects(ax, data, compact=True, max_mag=DEFAULT_CHART_MAX_MAG)
+            self.plot_constellation_lines(ax, constellation_segments)
             self.add_chart_legend(ax, compact=True)
             
             # Save to BytesIO
@@ -992,9 +1262,31 @@ class CelestialCalculator(VNCToolWindow):
 
     def show_results(self, text):
         """Display results in a scrollable text window."""
+        if not text:
+            self.show_info("No Report", "No report text is available yet.")
+            return
+
+        layout = self.get_dual_window_layout()
+        right = layout['right']
+
+        if self.result_window and self.result_window.winfo_exists():
+            result_win = self.result_window
+            result_win.deiconify()
+            result_win.lift()
+            text_widget = getattr(result_win, "text_widget", None)
+            if text_widget is not None:
+                text_widget.config(state=tk.NORMAL)
+                text_widget.delete("1.0", tk.END)
+                text_widget.insert(tk.END, text)
+                text_widget.config(state=tk.DISABLED)
+            return
+
         result_win = tk.Toplevel(self)
         result_win.title("Celestial Navigation Results")
-        result_win.geometry("800x600")
+        result_win.geometry(f"{right['w']}x{right['h']}+{right['x']}+{right['y']}")
+        result_win.minsize(320, 420)
+        result_win.lift()
+        self.result_window = result_win
         
         scrollbar = tk.Scrollbar(result_win)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1003,13 +1295,16 @@ class CelestialCalculator(VNCToolWindow):
                              font=("Courier", 10))
         text_widget.pack(expand=True, fill=tk.BOTH)
         scrollbar.config(command=text_widget.yview)
+        result_win.text_widget = text_widget
         
         text_widget.insert(tk.END, text)
         text_widget.config(state=tk.DISABLED)
         
         def on_close():
+            self.result_window = None
             result_win.destroy()
-            self.deiconify()
+            if not (self.chart_window and self.chart_window.winfo_exists()):
+                self.deiconify()
         
         result_win.protocol("WM_DELETE_WINDOW", on_close)
 
