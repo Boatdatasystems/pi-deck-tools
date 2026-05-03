@@ -79,6 +79,7 @@ Paths used:
 | `sun_moon.py` | Working | Celestial calculator using Skyfield + `data/de421.bsp`; sun/moon rise/set/transit; requires `hip_main.dat` for star chart |
 | `maidenhead.py` | Working | Gets position from Signal K, calculates 6-char Maidenhead grid locator |
 | `hifiberry_volume.py` | Working | tkinter sliders → `amixer sset` for HiFiBerry DAC volume |
+| `backup_utility.py` | **New / v1** | Two-pane backup manager: source list + backup output list, notes, manual run, interval auto-backup, JSON config |
 | `opencpn_db_probe.py` | Utility | Interactive probe for navobj.db schema/content |
 
 ---

@@ -34,6 +34,7 @@ The [OpenCPN Launcher Plugin](https://opencpn-manuals.github.io/main/opencpn-plu
 | HiFiBerry Volume | `/home/pi/pi-deck-tools/launch_pi_app.sh hifiberry_volume` |
 | Sun/Moon | `/home/pi/pi-deck-tools/launch_pi_app.sh sun_moon` |
 | Passage Planning | `/home/pi/pi-deck-tools/launch_pi_app.sh passage_planning` |
+| Backup Utility | `/home/pi/pi-deck-tools/launch_pi_app.sh backup_utility` |
 
 If a specific display must be forced on your Pi, use:
 

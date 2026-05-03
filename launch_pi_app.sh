@@ -9,6 +9,7 @@ set -euo pipefail
 #   bash launch_pi_app.sh sun_moon
 #   bash launch_pi_app.sh passage_planning
 #   bash launch_pi_app.sh passage_planner
+#   bash launch_pi_app.sh backup_utility
 #
 # Optional:
 #   PI_DECK_DISPLAY=:0 bash launch_pi_app.sh maidenhead
@@ -18,13 +19,16 @@ VENV_PY="$PROJECT_DIR/.venv/bin/python"
 APPS_DIR="$PROJECT_DIR/apps"
 
 if [ $# -ne 1 ]; then
-  echo "Usage: bash launch_pi_app.sh <maidenhead|hifiberry_volume|sun_moon|passage_planning|passage_planner>"
+  echo "Usage: bash launch_pi_app.sh <maidenhead|hifiberry_volume|sun_moon|passage_planning|passage_planner|backup_utility|backup>"
   exit 1
 fi
 
 APP_NAME="$1"
 if [ "$APP_NAME" = "passage_planner" ]; then
   APP_NAME="passage_planning"
+fi
+if [ "$APP_NAME" = "backup" ]; then
+  APP_NAME="backup_utility"
 fi
 APP_PATH="$APPS_DIR/${APP_NAME}.py"
 
@@ -36,7 +40,7 @@ fi
 
 if [ ! -f "$APP_PATH" ]; then
   echo "Unknown app: $APP_NAME"
-  echo "Valid options: maidenhead, hifiberry_volume, sun_moon, passage_planning (alias: passage_planner)"
+  echo "Valid options: maidenhead, hifiberry_volume, sun_moon, passage_planning (alias: passage_planner), backup_utility (alias: backup)"
   exit 1
 fi
 
