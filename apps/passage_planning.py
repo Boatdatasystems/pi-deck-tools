@@ -236,6 +236,12 @@ class PassagePlanningTool(VNCToolWindow):
         tk.Label(plan_row, text="Boat Speed (kt)", font=self.font_normal, bg=self.COLOR_BG, fg=self.COLOR_FG).pack(side=tk.LEFT)
         self.speed_var = tk.StringVar(value="5.0")
         tk.Entry(plan_row, textvariable=self.speed_var, width=8, font=self.font_small).pack(side=tk.LEFT, padx=(8, 14))
+        tk.Label(plan_row, text="TWA alert ±°", font=self.font_normal, bg=self.COLOR_BG, fg=self.COLOR_FG).pack(side=tk.LEFT)
+        self.twa_alert_var = tk.StringVar(value="60")
+        tk.Entry(plan_row, textvariable=self.twa_alert_var, width=5, font=self.font_small).pack(side=tk.LEFT, padx=(6, 12))
+        tk.Label(plan_row, text="AWA alert ±°", font=self.font_normal, bg=self.COLOR_BG, fg=self.COLOR_FG).pack(side=tk.LEFT)
+        self.awa_alert_var = tk.StringVar(value="50")
+        tk.Entry(plan_row, textvariable=self.awa_alert_var, width=5, font=self.font_small).pack(side=tk.LEFT, padx=(6, 14))
         tk.Button(plan_row, text="Build 3h Table", command=self.generate_plan, bg="#27ae60", fg="white", padx=14).pack(side=tk.LEFT)
 
         self.summary_var = tk.StringVar(value="Load an OpenCPN route to begin.")
@@ -564,14 +570,23 @@ class PassagePlanningTool(VNCToolWindow):
         self.wait_window(win)
         return result["choice"]
 
-    def _is_upwind_twa_value(self, twa_text: str) -> bool:
-        """Return True when a TWA string value is in the -50° to +50° range."""
-        if not twa_text or twa_text == "--":
+    def _angle_alert_threshold(self, var: tk.StringVar, default_value: float) -> float:
+        """Return a validated positive alert threshold in degrees from a Tk variable."""
+        try:
+            threshold = float(var.get().strip())
+        except (ValueError, AttributeError):
+            return default_value
+        return threshold if threshold > 0 else default_value
+
+    def _is_alert_angle_value(self, angle_text: str, threshold_deg: float) -> bool:
+        """Return True when a signed angle string is inside ±threshold degrees."""
+        if not angle_text or angle_text == "--":
             return False
-        match = re.search(r"[-+]?\d+(?:\.\d+)?", twa_text)
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", angle_text)
         if not match:
             return False
-        return -50.0 <= float(match.group(0)) <= 50.0
+        angle_val = float(match.group(0))
+        return -threshold_deg <= angle_val <= threshold_deg
 
     def _apply_table_highlights(self, display_rows: list[list]) -> None:
         """Windy-inspired bands in transposed layout: each row is a field, cols are timesteps."""
@@ -579,6 +594,8 @@ class PassagePlanningTool(VNCToolWindow):
         if not display_rows:
             return
         n_cols = len(display_rows[0])
+        twa_alert_deg = self._angle_alert_threshold(self.twa_alert_var, 60.0)
+        awa_alert_deg = self._angle_alert_threshold(self.awa_alert_var, 50.0)
 
         # Row index labels: frozen panel, consistent dark style
         for row_idx in range(len(display_rows)):
@@ -598,15 +615,19 @@ class PassagePlanningTool(VNCToolWindow):
         if len(display_rows) > 6:
             for col_idx in range(n_cols):
                 val = display_rows[6][col_idx] if col_idx < len(display_rows[6]) else "--"
-                if self._is_upwind_twa_value(val):
+                if self._is_alert_angle_value(val, twa_alert_deg):
                     self._sheet_highlight_cell(6, col_idx, bg="#c48000", fg="#0a0a0a")
                 else:
                     self._sheet_highlight_cell(6, col_idx, bg="#0a1a10", fg="#30a060")
 
-        # AWA row (7): cyan-blue
+        # AWA row (7): cyan-blue base, amber override for narrow apparent angles
         if len(display_rows) > 7:
             for col_idx in range(n_cols):
-                self._sheet_highlight_cell(7, col_idx, bg="#06131e", fg="#2a8090")
+                val = display_rows[7][col_idx] if col_idx < len(display_rows[7]) else "--"
+                if self._is_alert_angle_value(val, awa_alert_deg):
+                    self._sheet_highlight_cell(7, col_idx, bg="#c48000", fg="#0a0a0a")
+                else:
+                    self._sheet_highlight_cell(7, col_idx, bg="#06131e", fg="#2a8090")
 
         # TWS row (8): value-driven Beaufort ramp
         if len(display_rows) > 8:
