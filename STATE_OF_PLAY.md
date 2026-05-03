@@ -137,7 +137,7 @@ bash setup_pi_venv.sh        # installs libeccodes, creates .venv, pip installs 
 
 ## Known Issues / TODOs
 
-- [ ] `docs/images/` screenshot not yet committed
+- [x] Passage planning screenshot committed in `docs/images/`
 - [ ] `opencpn_db_probe.py` is a dev utility — consider moving to `tools/` or `dev/`
 - [ ] Passage planning: export table to CSV or plain text
 - [ ] Passage planning: optional map mini-panel with wind barbs/arrows

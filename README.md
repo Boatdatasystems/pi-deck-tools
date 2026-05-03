@@ -18,6 +18,10 @@ A collection of Python/tkinter utility tools for use aboard a small boat, launch
 
 ![Current sky chart from sun_moon tool](docs/images/current-sky.png)
 
+## Passage Planning
+
+![Passage planning window](docs/images/passage-planning-window.png)
+
 ## Hardware / Software Stack
 
 - **Hardware:** Raspberry Pi 5, 4 GB RAM, HiFiBerry DAC
