@@ -24,14 +24,14 @@ import sys
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from tksheet import Sheet
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.grib_reader import GribReader
-from shared.opencpn_db import OpenCPNDbError, list_routes, route_with_waypoints
+from shared.opencpn_db import OpenCPNDbError, create_planner_route, list_routes, route_with_waypoints
 from shared.vnc_window import VNCToolWindow
 
 
@@ -197,6 +197,7 @@ class PassagePlanningTool(VNCToolWindow):
         self.grib_reader: GribReader | None = None
         self._last_grib_path_file = Path(__file__).parent.parent / ".last_grib_path"
         self.twa_row_index = 6          # TWA° is field row 6 in transposed layout
+        self._latest_plan_points: list[dict] = []
         # Timeline slider state
         self._slider_dragging = False
         self._slider_drag_start_x = 0
@@ -243,6 +244,14 @@ class PassagePlanningTool(VNCToolWindow):
         self.awa_alert_var = tk.StringVar(value="50")
         tk.Entry(plan_row, textvariable=self.awa_alert_var, width=5, font=self.font_small).pack(side=tk.LEFT, padx=(6, 14))
         tk.Button(plan_row, text="Build 3h Table", command=self.generate_plan, bg="#27ae60", fg="white", padx=14).pack(side=tk.LEFT)
+        tk.Button(
+            plan_row,
+            text="Create OpenCPN Planner Route",
+            command=self.create_planner_route_in_opencpn,
+            bg="#1f618d",
+            fg="white",
+            padx=12,
+        ).pack(side=tk.LEFT)
 
         self.summary_var = tk.StringVar(value="Load an OpenCPN route to begin.")
         tk.Label(self.content_frame, textvariable=self.summary_var, font=self.font_small, bg=self.COLOR_BG, fg="#a8d8ff", anchor="w", justify=tk.LEFT).pack(fill=tk.X, pady=(0, 4))
@@ -445,28 +454,28 @@ class PassagePlanningTool(VNCToolWindow):
         self._update_row_index(len(display_rows))
         self._sheet_set_column_widths([100] * len(stub_rows))
 
-    def generate_plan(self) -> None:
+    def _get_plan_inputs(self) -> tuple[datetime, float] | None:
+        """Validate departure/speed and apply GRIB coverage adjustment flow."""
         if not self.route_data:
             self.show_error("No Route", "Load a route before building the passage table.")
-            return
+            return None
 
         try:
             departure_utc = datetime.strptime(self.departure_var.get().strip(), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
         except ValueError:
             self.show_error("Departure Format", "Use departure format YYYY-MM-DD HH:MM in UTC.")
-            return
+            return None
 
         try:
             speed_kn = float(self.speed_var.get())
         except ValueError:
             self.show_error("Boat Speed", "Boat speed must be a number in knots.")
-            return
+            return None
 
         if speed_kn <= 0:
             self.show_error("Boat Speed", "Boat speed must be greater than zero.")
-            return
+            return None
 
-        # Warn if departure is too late for GRIB coverage.
         if self.grib_reader and self.grib_reader.valid_times:
             total_nm = self.route_total_nm(self.route_data["waypoints"])
             passage_hours = total_nm / speed_kn
@@ -474,18 +483,24 @@ class PassagePlanningTool(VNCToolWindow):
             grib_end = self.grib_reader.valid_times[-1]
             if eta > grib_end:
                 latest_departure = grib_end - timedelta(hours=passage_hours)
-                answer = self._ask_departure_adjustment(
-                    eta, grib_end, latest_departure
-                )
+                answer = self._ask_departure_adjustment(eta, grib_end, latest_departure)
                 if answer == "adjust":
-                    departure_utc = latest_departure.replace(
-                        minute=0, second=0, microsecond=0
-                    )
+                    departure_utc = latest_departure.replace(minute=0, second=0, microsecond=0)
                     self.departure_var.set(departure_utc.strftime("%Y-%m-%d %H:%M"))
                 elif answer == "cancel":
-                    return
+                    return None
 
-        rows = self.build_passage_rows(self.route_data["waypoints"], departure_utc, speed_kn)
+        return departure_utc, speed_kn
+
+    def generate_plan(self) -> None:
+        plan_inputs = self._get_plan_inputs()
+        if plan_inputs is None or not self.route_data:
+            return
+        departure_utc, speed_kn = plan_inputs
+
+        points = self._build_timeline_points(self.route_data["waypoints"], departure_utc, speed_kn)
+        self._latest_plan_points = points
+        rows = [self._display_row_from_point(point, points[-1]["run_nm"], speed_kn) for point in points]
         self.clear_table()
         time_headers, display_rows = self._transpose_for_display(rows)
         self._update_sheet_headers(time_headers)
@@ -506,6 +521,57 @@ class PassagePlanningTool(VNCToolWindow):
         self.summary_var.set(
             f"Built {len(rows)} timeline rows at {TIMELINE_STEP_HOURS}-hour spacing. "
             f"ETA approx {eta.strftime('%Y-%m-%d %H:%M UTC')}. {grib_note}"
+        )
+
+    def create_planner_route_in_opencpn(self) -> None:
+        """Create or replace '<route>_planner' in OpenCPN using timeline points."""
+        if not self.route_data:
+            self.show_error("No Route", "Load a route before creating a planner route.")
+            return
+
+        route_name = self.route_data.get("route_name", self.route_var.get().strip())
+        if not route_name:
+            self.show_error("Route Required", "No source route is selected.")
+            return
+
+        plan_inputs = self._get_plan_inputs()
+        if plan_inputs is None:
+            return
+        departure_utc, speed_kn = plan_inputs
+
+        points = self._build_timeline_points(self.route_data["waypoints"], departure_utc, speed_kn)
+        if not points:
+            self.show_error("Planner Route", "Could not build timeline points for planner route.")
+            return
+
+        planner_route_name = f"{route_name}_planner"
+        if not messagebox.askyesno(
+            "Create Planner Route",
+            (
+                f"Create or replace OpenCPN route '{planner_route_name}' with "
+                f"{len(points)} waypoints from the current timeline?"
+            ),
+            parent=self,
+        ):
+            return
+
+        upload_points = [
+            {
+                "name": self._planner_waypoint_name(point["time_utc"]),
+                "lat": point["lat"],
+                "lon": point["lon"],
+            }
+            for point in points
+        ]
+
+        try:
+            result = create_planner_route(route_name, upload_points)
+        except OpenCPNDbError as exc:
+            self.show_error("Planner Route Error", str(exc))
+            return
+
+        self.summary_var.set(
+            f"OpenCPN route '{result['route_name']}' updated with {result['waypoint_count']} planner waypoints."
         )
 
     def _ask_departure_adjustment(
@@ -702,10 +768,11 @@ class PassagePlanningTool(VNCToolWindow):
             except Exception:
                 pass
 
-    def build_passage_rows(self, waypoints: list[dict], departure_utc: datetime, speed_kn: float) -> list[tuple]:
-        if len(waypoints) < 2:
-            return []
+    def _planner_waypoint_name(self, dt_utc: datetime) -> str:
+        """Format planner waypoint names like 'Monday 3rd 12:00'."""
+        return f"{dt_utc.strftime('%A')} {_ordinal(dt_utc.day)} {dt_utc.strftime('%H:%M')}"
 
+    def _build_route_segments(self, waypoints: list[dict]) -> tuple[list[dict], float]:
         segments = []
         cumulative_nm = 0.0
         for index in range(len(waypoints) - 1):
@@ -723,33 +790,111 @@ class PassagePlanningTool(VNCToolWindow):
                 }
             )
             cumulative_nm += distance_nm
+        return segments, cumulative_nm
 
-        total_nm = cumulative_nm
-        rows = []
+    def _point_for_distance(
+        self,
+        segments: list[dict],
+        run_nm: float,
+        total_nm: float,
+        time_utc: datetime,
+    ) -> dict:
+        for segment in segments:
+            seg_start = segment["start_cumulative_nm"]
+            seg_end = seg_start + segment["distance_nm"]
+            if run_nm <= seg_end or math.isclose(run_nm, seg_end):
+                if segment["distance_nm"] <= 0:
+                    fraction = 0.0
+                else:
+                    fraction = max(0.0, min(1.0, (run_nm - seg_start) / segment["distance_nm"]))
+                lat, lon = interpolate_lat_lon(segment["start"], segment["end"], fraction)
+                start_name = segment["start"].get("name") or f"WP {segment['start'].get('sequence', '?')}"
+                end_name = segment["end"].get("name") or f"WP {segment['end'].get('sequence', '?')}"
+                return {
+                    "time_utc": time_utc,
+                    "lat": lat,
+                    "lon": lon,
+                    "run_nm": run_nm,
+                    "remain_nm": max(0.0, total_nm - run_nm),
+                    "bearing_deg": segment["bearing_deg"],
+                    "leg": f"{start_name}->{end_name}",
+                }
+
+        final = segments[-1]
+        end_name = final["end"].get("name") or f"WP {final['end'].get('sequence', '?')}"
+        return {
+            "time_utc": time_utc,
+            "lat": final["end"]["lat"],
+            "lon": final["end"]["lon"],
+            "run_nm": total_nm,
+            "remain_nm": 0.0,
+            "bearing_deg": final["bearing_deg"],
+            "leg": end_name,
+        }
+
+    def _build_timeline_points(self, waypoints: list[dict], departure_utc: datetime, speed_kn: float) -> list[dict]:
+        if len(waypoints) < 2:
+            return []
+
+        segments, total_nm = self._build_route_segments(waypoints)
+        points: list[dict] = []
         step_index = 0
         elapsed_hours = 0.0
 
         while True:
             run_nm = min(total_nm, speed_kn * elapsed_hours)
-            row = self.row_for_distance(
-                segments, run_nm, total_nm,
+            point = self._point_for_distance(
+                segments,
+                run_nm,
+                total_nm,
                 departure_utc + timedelta(hours=elapsed_hours),
-                speed_kn,
             )
-            rows.append(row)
+            points.append(point)
             if run_nm >= total_nm:
                 break
             step_index += 1
             elapsed_hours = step_index * TIMELINE_STEP_HOURS
 
-        if rows:
-            last_time = rows[-1][0]
+        if points:
             final_eta = departure_utc + timedelta(hours=(total_nm / speed_kn))
-            if last_time != final_eta.strftime("%Y-%m-%d %H:%M"):
-                final_row = self.row_for_distance(segments, total_nm, total_nm, final_eta, speed_kn)
-                rows.append(final_row)
+            if points[-1]["time_utc"].strftime("%Y-%m-%d %H:%M") != final_eta.strftime("%Y-%m-%d %H:%M"):
+                points.append(self._point_for_distance(segments, total_nm, total_nm, final_eta))
 
-        return rows
+        return points
+
+    def _display_row_from_point(self, point: dict, total_nm: float, speed_kn: float) -> tuple:
+        twd, tws, twa, aws, awa = self._wind_columns(
+            point["lat"], point["lon"], point["time_utc"], point["bearing_deg"], speed_kn
+        )
+        wvdir, wvang, wvht, wvper = self._wave_columns(
+            point["lat"], point["lon"], point["time_utc"], point["bearing_deg"]
+        )
+        return (
+            point["time_utc"].strftime("%Y-%m-%d %H:%M"),
+            point["leg"],
+            f"{point['run_nm']:.1f}",
+            f"{max(0.0, total_nm - point['run_nm']):.1f}",
+            f"{point['bearing_deg']:.0f}° {compass_arrow16(point['bearing_deg'])}",
+            twd,
+            twa,
+            awa,
+            tws,
+            aws,
+            wvdir,
+            wvang,
+            wvht,
+            wvper,
+        )
+
+    def build_passage_rows(self, waypoints: list[dict], departure_utc: datetime, speed_kn: float) -> list[tuple]:
+        if len(waypoints) < 2:
+            return []
+
+        points = self._build_timeline_points(waypoints, departure_utc, speed_kn)
+        if not points:
+            return []
+        total_nm = points[-1]["run_nm"]
+        return [self._display_row_from_point(point, total_nm, speed_kn) for point in points]
 
     def _wind_columns(self, lat: float, lon: float, time_utc: datetime, course_deg: float, speed_kn: float) -> tuple[str, str, str, str, str]:
         """Return (twd, tws, twa, aws, awa) strings; '--' if GRIB not loaded or outside coverage."""
@@ -853,44 +998,8 @@ class PassagePlanningTool(VNCToolWindow):
         return wv_dir_text, wv_ang_text, wv_ht_text, wv_per_text
 
     def row_for_distance(self, segments: list[dict], run_nm: float, total_nm: float, time_utc: datetime, speed_kn: float = 5.0) -> tuple:
-        for segment in segments:
-            seg_start = segment["start_cumulative_nm"]
-            seg_end = seg_start + segment["distance_nm"]
-            if run_nm <= seg_end or math.isclose(run_nm, seg_end):
-                if segment["distance_nm"] <= 0:
-                    fraction = 0.0
-                else:
-                    fraction = max(0.0, min(1.0, (run_nm - seg_start) / segment["distance_nm"]))
-                lat, lon = interpolate_lat_lon(segment["start"], segment["end"], fraction)
-                start_name = segment["start"].get("name") or f"WP {segment['start'].get('sequence', '?')}"
-                end_name = segment["end"].get("name") or f"WP {segment['end'].get('sequence', '?')}"
-                twd, tws, twa, aws, awa = self._wind_columns(lat, lon, time_utc, segment["bearing_deg"], speed_kn)
-                wvdir, wvang, wvht, wvper = self._wave_columns(lat, lon, time_utc, segment["bearing_deg"])
-                return (
-                    time_utc.strftime("%Y-%m-%d %H:%M"),
-                    f"{start_name}->{end_name}",
-                    f"{run_nm:.1f}",
-                    f"{max(0.0, total_nm - run_nm):.1f}",
-                    f"{segment['bearing_deg']:.0f}° {compass_arrow16(segment['bearing_deg'])}",
-                    twd, twa, awa, tws, aws,
-                    wvdir, wvang, wvht, wvper,
-                )
-
-        final = segments[-1]
-        lat = final["end"]["lat"]
-        lon = final["end"]["lon"]
-        end_name = final["end"].get("name") or f"WP {final['end'].get('sequence', '?')}"
-        twd, tws, twa, aws, awa = self._wind_columns(lat, lon, time_utc, final["bearing_deg"], speed_kn)
-        wvdir, wvang, wvht, wvper = self._wave_columns(lat, lon, time_utc, final["bearing_deg"])
-        return (
-            time_utc.strftime("%Y-%m-%d %H:%M"),
-            end_name,
-            f"{total_nm:.1f}",
-            "0.0",
-            f"{final['bearing_deg']:.0f}° {compass_arrow16(final['bearing_deg'])}",
-            twd, twa, awa, tws, aws,
-            wvdir, wvang, wvht, wvper,
-        )
+        point = self._point_for_distance(segments, run_nm, total_nm, time_utc)
+        return self._display_row_from_point(point, total_nm, speed_kn)
 
     def route_total_nm(self, waypoints: list[dict]) -> float:
         total_nm = 0.0
