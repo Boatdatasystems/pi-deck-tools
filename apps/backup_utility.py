@@ -30,6 +30,7 @@ from shared.vnc_window import VNCToolWindow
 class BackupUtility(VNCToolWindow):
     def __init__(self) -> None:
         super().__init__(title="Backup Utility", width=1280, height=760)
+        self.resizable(True, True)
 
         self.config_path = Path(__file__).resolve().parent.parent / "data" / "backup_utility_jobs.json"
         self.sources: list[dict[str, str]] = []
