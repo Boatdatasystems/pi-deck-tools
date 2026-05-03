@@ -7,6 +7,8 @@ set -euo pipefail
 #   bash launch_pi_app.sh maidenhead
 #   bash launch_pi_app.sh hifiberry_volume
 #   bash launch_pi_app.sh sun_moon
+#   bash launch_pi_app.sh passage_planning
+#   bash launch_pi_app.sh passage_planner
 #
 # Optional:
 #   PI_DECK_DISPLAY=:0 bash launch_pi_app.sh maidenhead
@@ -16,11 +18,14 @@ VENV_PY="$PROJECT_DIR/.venv/bin/python"
 APPS_DIR="$PROJECT_DIR/apps"
 
 if [ $# -ne 1 ]; then
-  echo "Usage: bash launch_pi_app.sh <maidenhead|hifiberry_volume|sun_moon>"
+  echo "Usage: bash launch_pi_app.sh <maidenhead|hifiberry_volume|sun_moon|passage_planning|passage_planner>"
   exit 1
 fi
 
 APP_NAME="$1"
+if [ "$APP_NAME" = "passage_planner" ]; then
+  APP_NAME="passage_planning"
+fi
 APP_PATH="$APPS_DIR/${APP_NAME}.py"
 
 if [ ! -x "$VENV_PY" ]; then
@@ -31,13 +36,17 @@ fi
 
 if [ ! -f "$APP_PATH" ]; then
   echo "Unknown app: $APP_NAME"
-  echo "Valid options: maidenhead, hifiberry_volume, sun_moon"
+  echo "Valid options: maidenhead, hifiberry_volume, sun_moon, passage_planning (alias: passage_planner)"
   exit 1
 fi
 
 # Keep OpenCPN's DISPLAY by default. Only override when explicitly requested.
 if [ -n "${PI_DECK_DISPLAY:-}" ]; then
   export DISPLAY="$PI_DECK_DISPLAY"
+fi
+
+if [ "$APP_NAME" = "passage_planning" ]; then
+  exec "$VENV_PY" "$APP_PATH" --fullscreen
 fi
 
 exec "$VENV_PY" "$APP_PATH"

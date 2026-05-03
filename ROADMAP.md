@@ -21,13 +21,19 @@
   - [x] Load OpenCPN routes via `shared/opencpn_db.py`
   - [x] GRIB2 wind overlay (`shared/grib_reader.py`) — TWD, TWS, TWA, AWS, AWA
   - [x] GRIB2 wave overlay — WvDir, WvAng, WvHt, WvPer
-  - [x] 3-hour timeline table (tksheet, 16 columns)
+  - [x] 3-hour timeline table (tksheet)
   - [x] Per-cell amber highlight for upwind TWA rows
   - [x] GRIB departure coverage check dialog
   - [x] Departure slider snapped to GRIB valid times, auto-rebuilds table on release
   - [x] Departure UTC text entry snaps to nearest GRIB step on Build
   - [x] NaN wave values render as `--`
   - [x] Resizable window with minsize
+  - [x] Windy-style transposed layout (timeline columns)
+  - [x] Frozen field labels via row index (always visible)
+  - [x] Wind/wave color ramps + compact legend
+  - [x] Direction arrows on Course/TWD/TWA/AWA cells
+  - [x] Friendly departure slider text
+  - [x] Persist last-used GRIB path
 - [x] `shared/grib_reader.py` — GRIB2 wind + wave reader
   - [x] cfgrib + xarray + numpy; all data as numpy arrays
   - [x] Linear time interpolation + nearest-grid-point spatial
@@ -36,11 +42,12 @@
 
 ## Phase 3 — Polish & New Tools *(active)*
 
-- [ ] `docs/opencpn_launcher_setup.md` — how to wire tools into Launcher Plugin
+- [x] `docs/opencpn_launcher_setup.md` — include passage planning launcher command
+- [x] `launch_pi_app.sh` — passage_planning entry with fullscreen launcher mode
 - [ ] Per-tool `--test` / offline mode for dev without Signal K
 - [ ] `apps/nmea_monitor.py` — raw NMEA sentence display for diagnostics
 - [ ] `apps/vhf_channels.py` — VHF marine channel quick reference with search
-- [ ] Passage planning: colour-code wave height (e.g. red above threshold)
+- [x] Passage planning: colour-code wave height and wind speed with gradient bands
 - [ ] Passage planning: export table to CSV or plain text
 - [ ] Passage planning: show wind barbs or arrows in a small map panel
 

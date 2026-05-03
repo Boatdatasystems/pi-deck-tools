@@ -33,6 +33,7 @@ The [OpenCPN Launcher Plugin](https://opencpn-manuals.github.io/main/opencpn-plu
 | Maidenhead Grid | `/home/pi/pi-deck-tools/launch_pi_app.sh maidenhead` |
 | HiFiBerry Volume | `/home/pi/pi-deck-tools/launch_pi_app.sh hifiberry_volume` |
 | Sun/Moon | `/home/pi/pi-deck-tools/launch_pi_app.sh sun_moon` |
+| Passage Planning | `/home/pi/pi-deck-tools/launch_pi_app.sh passage_planning` |
 
 If a specific display must be forced on your Pi, use:
 

@@ -2,7 +2,7 @@
 
 > **Purpose of this document:** Onboarding context for an AI assistant (or returning developer) to get up to speed quickly. Updated as the project progresses.
 
-*Last updated: 2026-05-02*
+*Last updated: 2026-05-03*
 
 ---
 
@@ -75,7 +75,7 @@ Paths used:
 
 | App | Status | Notes |
 |---|---|---|
-| `passage_planning.py` | **Active / working** | Route loader + GRIB wind + wave overlay, 3h timeline table, amber upwind TWA highlight, departure slider |
+| `passage_planning.py` | **Active / working** | Route loader + GRIB wind + wave overlay, transposed Windy-style timeline, frozen field labels, color ramps + legend, departure slider |
 | `sun_moon.py` | Working | Celestial calculator using Skyfield + `data/de421.bsp`; sun/moon rise/set/transit; requires `hip_main.dat` for star chart |
 | `maidenhead.py` | Working | Gets position from Signal K, calculates 6-char Maidenhead grid locator |
 | `hifiberry_volume.py` | Working | tkinter sliders → `amixer sset` for HiFiBerry DAC volume |
@@ -85,18 +85,23 @@ Paths used:
 
 ## passage_planning.py — Detail
 
-**Table columns (15 total):**
-`UTC | Leg | Lat | Lon | Course T | Run NM | Remain NM | TWD° | TWS kt | TWA° | AWS kt | AWA° | WvDir° | WvAng° | WvHt m`
+**Table layout (transposed Windy-style):**
+- Columns = timeline steps (3-hour spacing)
+- Frozen row-index labels = `UTC | Leg | Run NM | Remain NM | Course T | TWD° | TWA° | AWA° | TWS kt | AWS kt | WvDir° | WvAng° | WvHt m | WvPer s`
 
 **Key features:**
-- Load route from OpenCPN → builds 3h-step timeline from departure time + boat speed
-- GRIB wind: TWD, TWS, TWA (signed), AWS, AWA — linear time interpolation + nearest-grid-point spatial
-- GRIB wave: wave direction, wave angle relative to bow, significant wave height — same interpolation
-- Per-cell amber highlight (`#ffbf00`) on upwind TWA rows (−50° to +50°)
-- Departure timeline slider (canvas) — drags to snap to nearest GRIB valid_time step, auto-rebuilds table on release
+- Load route from OpenCPN and build 3h-step timeline from departure time + boat speed
+- GRIB wind: TWD, TWS, TWA (signed), AWS, AWA with linear time interpolation + nearest-grid-point spatial
+- GRIB wave: wave direction, wave angle relative to bow, significant wave height, wave period
+- Frozen field-label column via tksheet row index (always visible while timeline columns scroll)
+- Course and wind-angle directional arrows (16-point) in table cells
+- Wind-speed Beaufort color ramp (TWS/AWS) and wave-height color ramp (WvHt)
+- Compact in-app legend for wind and wave color bands
+- Upwind TWA cells highlighted amber (about −50° to +50°)
+- Departure timeline slider with friendly labels (for example: "Leave Monday 5th May at 12:00")
 - GRIB coverage check dialog — warns if ETA exceeds GRIB end, offers adjust/proceed/cancel
-- NaN wave values render as `--` gracefully
-- Window resizable, minsize 900×600
+- Last-used GRIB path persistence in `.last_grib_path`
+- OpenCPN launcher mode starts passage planning in fullscreen
 - Table widget: `tksheet` 7.6.0 (with compatibility wrappers for API differences across versions)
 
 **GRIB wave loading notes:**
@@ -133,8 +138,9 @@ bash setup_pi_venv.sh        # installs libeccodes, creates .venv, pip installs 
 ## Known Issues / TODOs
 
 - [ ] `docs/images/` screenshot not yet committed
-- [ ] ROADMAP.md may be out of date
 - [ ] `opencpn_db_probe.py` is a dev utility — consider moving to `tools/` or `dev/`
+- [ ] Passage planning: export table to CSV or plain text
+- [ ] Passage planning: optional map mini-panel with wind barbs/arrows
 - [x] Passage planning: manual Departure UTC entry snaps to nearest GRIB step on Build
 - [x] Wave period column (`mpww`) now shown in table as `WvPer s`
 

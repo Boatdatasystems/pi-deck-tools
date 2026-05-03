@@ -19,6 +19,7 @@ Pi dependencies (install once):
 from __future__ import annotations
 
 import math
+import re
 import sys
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,39 @@ from shared.vnc_window import VNCToolWindow
 
 EARTH_RADIUS_NM = 3440.065
 TIMELINE_STEP_HOURS = 3
+
+# Field labels for the transposed (Windy-style) horizontal layout.
+# Index order must match the tuple returned by row_for_distance.
+ROW_LABELS = [
+    "UTC", "Leg", "Run NM", "Remain NM", "Course T",
+    "TWD°", "TWA°", "AWA°", "TWS kt", "AWS kt",
+    "WvDir°", "WvAng°", "WvHt m", "WvPer s",
+]
+
+
+def compass_arrow16(bearing_deg: float) -> str:
+    """Map an absolute compass bearing (0=N, 90=E) to a 16-point arrow pointing in that direction."""
+    icons = [
+        "↑", "↑·", "↗", "↗·",
+        "→", "→·", "↘", "↘·",
+        "↓", "↓·", "↙", "↙·",
+        "←", "←·", "↖", "↖·",
+    ]
+    a = bearing_deg % 360.0
+    index = int((a + 11.25) // 22.5) % 16
+    return icons[index]
+
+
+def _ordinal(n: int) -> str:
+    """Return n with English ordinal suffix, e.g. 1st, 2nd, 3rd, 5th."""
+    if 11 <= n % 100 <= 13:
+        return f"{n}th"
+    return f"{n}{['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]}"
+
+
+def _friendly_departure(dt: "datetime") -> str:
+    """Format a datetime as 'Leave Monday 5th May at 12:00'."""
+    return f"Leave {dt.strftime('%A')} {_ordinal(dt.day)} {dt.strftime('%B at %H:%M')}"
 
 
 def haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -87,6 +121,72 @@ def next_three_hour_utc() -> datetime:
     return now.replace(hour=next_hour_block)
 
 
+def relative_angle_arrow16(angle_deg: float) -> str:
+    """Map signed relative angle (-180..+180) to custom 16-point arrow-only icons.
+
+    Arrow shows wind as felt by crew facing forward (direction wind is travelling).
+    TWA=  0° → ↓  (dead ahead, pushes you back)
+    TWA=-45° → ↘  (port bow, pushes toward lower-right)
+    TWA=-90° → →  (port beam, pushes to starboard)
+    TWA=±180° → ↑ (astern, pushes you forward)
+    TWA=+90° → ←  (starboard beam, pushes to port)
+    TWA=+45° → ↙  (starboard bow, pushes toward lower-left)
+    """
+    icons = [
+        "↑", "↑·", "↗", "↗·",
+        "→", "→·", "↘", "↘·",
+        "↓", "↓·", "↙", "↙·",
+        "←", "←·", "↖", "↖·",
+    ]
+    # Arrow shows wind direction as felt by crew facing forward (where wind is going).
+    # +180 flips from "wind source" to "wind travel direction":
+    # -45° (from port bow)   → ↘  (wind pushes toward lower-right)
+    #   0° (from dead ahead) → ↓  (wind pushes straight back)
+    # +90° (from starboard)  → ←  (wind pushes to port)
+    # ±180° (from astern)    → ↑  (wind pushes forward)
+    a = (angle_deg + 180.0 + 360.0) % 360.0
+    index = int((a + 11.25) // 22.5) % 16
+    return icons[index]
+
+
+def _wind_speed_colors(knots_str: str) -> tuple[str, str]:
+    """Return (bg, fg) for a wind-speed cell using Beaufort-inspired bands."""
+    try:
+        kt = float(re.search(r"\d+(?:\.\d+)?", knots_str).group(0))  # type: ignore[union-attr]
+    except (AttributeError, ValueError, TypeError):
+        return "#0d2b20", "#90e8c0"
+    if kt < 4:
+        return "#0d3326", "#7dd8b0"   # calm — dark teal
+    if kt < 8:
+        return "#0e5c38", "#6eeaaa"   # light — teal-green
+    if kt < 12:
+        return "#0a5c7a", "#60d8f8"   # moderate — teal-blue
+    if kt < 17:
+        return "#155488", "#80c8ff"   # fresh — blue
+    if kt < 22:
+        return "#7d6008", "#ffe060"   # strong — amber
+    if kt < 28:
+        return "#7d3208", "#ffb060"   # near gale — orange
+    return "#7b241c", "#ff9090"       # gale+ — red
+
+
+def _wave_height_colors(ht_str: str) -> tuple[str, str]:
+    """Return (bg, fg) for a wave-height cell using sea-state bands."""
+    try:
+        h = float(re.search(r"\d+(?:\.\d+)?", ht_str).group(0))  # type: ignore[union-attr]
+    except (AttributeError, ValueError, TypeError):
+        return "#12103a", "#b0a0e8"
+    if h < 0.5:
+        return "#0e1a3a", "#8ab0e8"   # ripple — deep navy
+    if h < 1.0:
+        return "#1a2a5e", "#90b8f0"   # slight — navy-blue
+    if h < 2.0:
+        return "#2e1a6e", "#c0a0f0"   # moderate — violet-blue
+    if h < 3.0:
+        return "#4a1a6e", "#d880f8"   # rough — purple
+    return "#6b1a7e", "#f060ff"       # very rough — deep purple
+
+
 class PassagePlanningTool(VNCToolWindow):
     """Route-based passage planning scaffold for later GRIB integration."""
 
@@ -95,25 +195,8 @@ class PassagePlanningTool(VNCToolWindow):
         self.route_data: dict | None = None
         self.route_names: list[str] = []
         self.grib_reader: GribReader | None = None
-        self.table_headers = [
-            "UTC",
-            "Leg",
-            "Lat",
-            "Lon",
-            "Course T",
-            "Run NM",
-            "Remain NM",
-            "TWD°",
-            "TWS kt",
-            "TWA°",
-            "AWS kt",
-            "AWA°",
-            "WvDir°",
-            "WvAng°",
-            "WvHt m",
-            "WvPer s",
-        ]
-        self.twa_column_index = 9
+        self._last_grib_path_file = Path(__file__).parent.parent / ".last_grib_path"
+        self.twa_row_index = 6          # TWA° is field row 6 in transposed layout
         # Timeline slider state
         self._slider_dragging = False
         self._slider_drag_start_x = 0
@@ -156,29 +239,27 @@ class PassagePlanningTool(VNCToolWindow):
         tk.Button(plan_row, text="Build 3h Table", command=self.generate_plan, bg="#27ae60", fg="white", padx=14).pack(side=tk.LEFT)
 
         self.summary_var = tk.StringVar(value="Load an OpenCPN route to begin.")
-        tk.Label(self.content_frame, textvariable=self.summary_var, font=self.font_normal, bg=self.COLOR_BG, fg=self.COLOR_FG, anchor="w", justify=tk.LEFT).pack(fill=tk.X, pady=(0, 10))
-
-        self.status_var = tk.StringVar(value="Load a route, select a GRIB file, then Build 3h Table.")
-        tk.Label(self.content_frame, textvariable=self.status_var, font=self.font_small, bg=self.COLOR_BG, fg="#a8d8ff", anchor="w").pack(fill=tk.X, pady=(0, 8))
+        tk.Label(self.content_frame, textvariable=self.summary_var, font=self.font_small, bg=self.COLOR_BG, fg="#a8d8ff", anchor="w", justify=tk.LEFT).pack(fill=tk.X, pady=(0, 4))
 
         table_frame = tk.Frame(self.content_frame, bg=self.COLOR_BG)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
         self.plan_sheet = Sheet(
             table_frame,
-            headers=self.table_headers,
+            headers=[],
             data=[],
-            show_row_index=False,
+            show_row_index=True,
+            row_index_align="w",
             show_x_scrollbar=True,
             show_y_scrollbar=True,
             align="center",
             header_align="center",
             theme="dark blue",
         )
+        self.plan_sheet.set_index_width(110)
         self.plan_sheet.enable_bindings()
         self.plan_sheet.pack(fill=tk.BOTH, expand=True)
-
-        self._sheet_set_column_widths([130, 115, 88, 88, 68, 70, 82, 58, 58, 58, 58, 58, 60, 60, 60, 60])
+        # Column widths are set dynamically after data is loaded.
 
         # --- GRIB timeline slider -------------------------------------------
         slider_outer = tk.Frame(self.content_frame, bg=self.COLOR_BG)
@@ -208,24 +289,60 @@ class PassagePlanningTool(VNCToolWindow):
         self._slider_canvas.bind("<ButtonRelease-1>", self._slider_release)
         self._slider_canvas.bind("<Configure>",       lambda _e: self._redraw_slider())
 
+        self._build_legend()
+
+    def _build_legend(self) -> None:
+        """Compact single-line color legend: wind speed (Beaufort) + wave height."""
+        legend_frame = tk.Frame(self.content_frame, bg=self.COLOR_BG)
+        legend_frame.pack(fill=tk.X, pady=(3, 0))
+
+        row = tk.Frame(legend_frame, bg=self.COLOR_BG)
+        row.pack(fill=tk.X)
+        tk.Label(row, text="Wind kt: ", font=("Arial", 8), bg=self.COLOR_BG, fg="#7aaec8").pack(side=tk.LEFT)
+        for label, bg, fg in [
+            ("<4",    "#0d3326", "#7dd8b0"),
+            ("4-7",   "#0e5c38", "#6eeaaa"),
+            ("8-11",  "#0a5c7a", "#60d8f8"),
+            ("12-16", "#155488", "#80c8ff"),
+            ("17-21", "#7d6008", "#ffe060"),
+            ("22-27", "#7d3208", "#ffb060"),
+            ("28+",   "#7b241c", "#ff9090"),
+        ]:
+            tk.Label(row, text=f" {label} ", font=("Arial", 8), bg=bg, fg=fg, padx=1).pack(side=tk.LEFT, padx=1)
+        tk.Label(row, text="  Wave m: ", font=("Arial", 8), bg=self.COLOR_BG, fg="#b090e8").pack(side=tk.LEFT)
+        for label, bg, fg in [
+            ("<0.5",  "#0e1a3a", "#8ab0e8"),
+            ("0.5",   "#1a2a5e", "#90b8f0"),
+            ("1",     "#2e1a6e", "#c0a0f0"),
+            ("2",     "#4a1a6e", "#d880f8"),
+            ("3+",    "#6b1a7e", "#f060ff"),
+        ]:
+            tk.Label(row, text=f" {label} ", font=("Arial", 8), bg=bg, fg=fg, padx=1).pack(side=tk.LEFT, padx=1)
+
     def refresh_routes(self) -> None:
         try:
             routes = list_routes()
         except OpenCPNDbError as exc:
             self.show_error("OpenCPN Route Error", str(exc))
-            self.status_var.set("Could not read OpenCPN route list.")
+            self.summary_var.set("Could not read OpenCPN route list.")
             return
 
         self.route_names = [route.name for route in routes if route.name]
         self.route_combo["values"] = self.route_names
         if self.route_names and not self.route_var.get():
             self.route_var.set(self.route_names[0])
-        self.status_var.set(f"Loaded {len(self.route_names)} routes from OpenCPN.")
+        self.summary_var.set(f"Loaded {len(self.route_names)} routes from OpenCPN.")
 
     def _preseed_grib_path(self) -> None:
-        """If the data/ directory has a GRIB file and no path is set, pre-populate it."""
+        """Pre-populate GRIB path from last-used file, else first local data file."""
         if self.grib_var.get():
             return
+
+        last_path = self._load_last_grib_path()
+        if last_path is not None:
+            self.grib_var.set(str(last_path))
+            return
+
         data_dir = Path(__file__).parent.parent / "data"
         if data_dir.is_dir():
             candidates = sorted(data_dir.glob("*.grb2")) + sorted(data_dir.glob("*.grb"))
@@ -233,10 +350,18 @@ class PassagePlanningTool(VNCToolWindow):
                 self.grib_var.set(str(candidates[0]))
 
     def browse_grib(self) -> None:
-        initial_dir = str(Path(__file__).parent.parent / "data")
+        initial_dir = Path(__file__).parent.parent / "data"
+        current = Path(self.grib_var.get().strip()) if self.grib_var.get().strip() else None
+        if current and current.exists():
+            initial_dir = current.parent
+        else:
+            last_path = self._load_last_grib_path()
+            if last_path is not None:
+                initial_dir = last_path.parent
+
         file_path = filedialog.askopenfilename(
             title="Select GRIB File",
-            initialdir=initial_dir,
+            initialdir=str(initial_dir),
             filetypes=[
                 ("GRIB files", "*.grb *.grib *.grb2 *.grib2"),
                 ("All files", "*.*"),
@@ -244,19 +369,21 @@ class PassagePlanningTool(VNCToolWindow):
         )
         if file_path:
             self.grib_var.set(file_path)
+            self._save_last_grib_path(file_path)
             self.grib_reader = None
-            self.status_var.set("GRIB file selected — click Load GRIB to read coverage.")
+            self.summary_var.set("GRIB file selected — click Load GRIB to read coverage.")
 
     def load_grib(self) -> None:
         path = self.grib_var.get().strip()
         if not path:
             self.show_error("No GRIB File", "Select a GRIB file first.")
             return
-        self.status_var.set("Loading GRIB file…")
+        self.summary_var.set("Loading GRIB file…")
         self.update_idletasks()
         try:
             self.grib_reader = GribReader(path)
-            self.status_var.set(f"GRIB loaded – {self.grib_reader.coverage_summary()}")
+            self._save_last_grib_path(path)
+            self.summary_var.set(f"GRIB loaded – {self.grib_reader.coverage_summary()}")
             self._redraw_slider()
         except ImportError as exc:
             self.grib_reader = None
@@ -286,7 +413,7 @@ class PassagePlanningTool(VNCToolWindow):
             f"Route: {route_name}    Waypoints: {waypoint_count}    Total Distance: {total_nm:.1f} NM\n"
             f"Apparent wind will require a boat-speed assumption. Current scaffold uses a constant speed in knots."
         )
-        self.status_var.set("Route loaded. Build the 3-hour timeline now; GRIB columns are placeholders for the next step.")
+        self.summary_var.set("Route loaded. Build the 3-hour timeline now; GRIB columns are placeholders for the next step.")
         self.populate_route_preview()
 
     def populate_route_preview(self) -> None:
@@ -294,23 +421,23 @@ class PassagePlanningTool(VNCToolWindow):
         if not self.route_data:
             return
 
-        preview_rows = []
+        stub_rows = []
         for waypoint in self.route_data["waypoints"]:
             sequence = waypoint.get("sequence")
-            label = waypoint.get("name") or f"WP {sequence if sequence is not None else '?'}"
-            preview_rows.append(
-                (
-                    f"WP {sequence}" if sequence is not None else "WP",
-                    label,
-                    f"{waypoint['lat']:.4f}",
-                    f"{waypoint['lon']:.4f}",
-                    "--", "--", "--",
-                    "--", "--", "--", "--", "--",
-                    "--", "--", "--", "--",
-                ),
-            )
+            name = waypoint.get("name") or f"WP {sequence if sequence is not None else '?'}"
+            stub_rows.append((
+                f"WP {sequence}" if sequence is not None else "WP",
+                name,
+                "--", "--", "--",
+                "--", "--", "--", "--", "--",
+                "--", "--", "--", "--",
+            ))
 
-        self._sheet_set_data(preview_rows, redraw=True)
+        time_headers, display_rows = self._transpose_for_display(stub_rows)
+        self._update_sheet_headers(time_headers)
+        self._sheet_set_data(display_rows, redraw=True)
+        self._update_row_index(len(display_rows))
+        self._sheet_set_column_widths([100] * len(stub_rows))
 
     def generate_plan(self) -> None:
         if not self.route_data:
@@ -354,8 +481,12 @@ class PassagePlanningTool(VNCToolWindow):
 
         rows = self.build_passage_rows(self.route_data["waypoints"], departure_utc, speed_kn)
         self.clear_table()
-        self._sheet_set_data(rows, redraw=False)
-        self._apply_twa_cell_highlights(rows)
+        time_headers, display_rows = self._transpose_for_display(rows)
+        self._update_sheet_headers(time_headers)
+        self._sheet_set_data(display_rows, redraw=False)
+        self._update_row_index(len(display_rows))
+        self._apply_table_highlights(display_rows)
+        self._sheet_set_column_widths([68] * len(rows))
         self._sheet_redraw()
 
         total_nm = self.route_total_nm(self.route_data["waypoints"])
@@ -366,7 +497,7 @@ class PassagePlanningTool(VNCToolWindow):
             grib_note = f"Wind data from GRIB (coverage ends {grib_end})."
         else:
             grib_note = "No GRIB loaded — wind columns are placeholders."
-        self.status_var.set(
+        self.summary_var.set(
             f"Built {len(rows)} timeline rows at {TIMELINE_STEP_HOURS}-hour spacing. "
             f"ETA approx {eta.strftime('%Y-%m-%d %H:%M UTC')}. {grib_note}"
         )
@@ -433,28 +564,122 @@ class PassagePlanningTool(VNCToolWindow):
         self.wait_window(win)
         return result["choice"]
 
-    def _row_is_upwind_twa(self, row: tuple) -> bool:
-        """Return True when TWA is in the -50° to +50° range."""
-        if len(row) <= self.twa_column_index:
+    def _is_upwind_twa_value(self, twa_text: str) -> bool:
+        """Return True when a TWA string value is in the -50° to +50° range."""
+        if not twa_text or twa_text == "--":
             return False
-
-        twa_text = str(row[self.twa_column_index]).strip()
-        if twa_text in {"--", ""}:
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", twa_text)
+        if not match:
             return False
+        return -50.0 <= float(match.group(0)) <= 50.0
 
-        try:
-            twa_value = float(twa_text.replace("°", ""))
-        except ValueError:
-            return False
-
-        return -50.0 <= twa_value <= 50.0
-
-    def _apply_twa_cell_highlights(self, rows: list[tuple]) -> None:
-        """Color only the TWA cell amber when it is between -50° and +50°."""
+    def _apply_table_highlights(self, display_rows: list[list]) -> None:
+        """Windy-inspired bands in transposed layout: each row is a field, cols are timesteps."""
         self._sheet_clear_highlights()
-        for row_index, row in enumerate(rows):
-            if self._row_is_upwind_twa(row):
-                self._sheet_highlight_cell(row_index, self.twa_column_index, bg="#ffbf00", fg="#1a1a1a")
+        if not display_rows:
+            return
+        n_cols = len(display_rows[0])
+
+        # Row index labels: frozen panel, consistent dark style
+        for row_idx in range(len(display_rows)):
+            self._sheet_highlight_index_cell(row_idx, bg="#0d1b2a", fg="#7aaec8")
+
+        # Route group rows 0-4: dark steel-blue
+        for row_idx in range(min(5, len(display_rows))):
+            for col_idx in range(n_cols):
+                self._sheet_highlight_cell(row_idx, col_idx, bg="#162436", fg="#c0d4e8")
+
+        # TWD row (5): teal
+        if len(display_rows) > 5:
+            for col_idx in range(n_cols):
+                self._sheet_highlight_cell(5, col_idx, bg="#0d2b20", fg="#90e8c0")
+
+        # TWA row (6): teal-green base, amber override for upwind cells
+        if len(display_rows) > 6:
+            for col_idx in range(n_cols):
+                val = display_rows[6][col_idx] if col_idx < len(display_rows[6]) else "--"
+                if self._is_upwind_twa_value(val):
+                    self._sheet_highlight_cell(6, col_idx, bg="#c48000", fg="#0a0a0a")
+                else:
+                    self._sheet_highlight_cell(6, col_idx, bg="#0a1a10", fg="#30a060")
+
+        # AWA row (7): cyan-blue
+        if len(display_rows) > 7:
+            for col_idx in range(n_cols):
+                self._sheet_highlight_cell(7, col_idx, bg="#06131e", fg="#2a8090")
+
+        # TWS row (8): value-driven Beaufort ramp
+        if len(display_rows) > 8:
+            for col_idx in range(n_cols):
+                val = display_rows[8][col_idx] if col_idx < len(display_rows[8]) else "--"
+                bg, fg = _wind_speed_colors(val)
+                self._sheet_highlight_cell(8, col_idx, bg=bg, fg=fg)
+
+        # AWS row (9): value-driven Beaufort ramp
+        if len(display_rows) > 9:
+            for col_idx in range(n_cols):
+                val = display_rows[9][col_idx] if col_idx < len(display_rows[9]) else "--"
+                bg, fg = _wind_speed_colors(val)
+                self._sheet_highlight_cell(9, col_idx, bg=bg, fg=fg)
+
+        # WvDir, WvAng rows (10, 11): violet
+        for row_idx in (10, 11):
+            if len(display_rows) > row_idx:
+                for col_idx in range(n_cols):
+                    self._sheet_highlight_cell(row_idx, col_idx, bg="#160d38", fg="#b090e8")
+
+        # WvHt row (12): value-driven wave ramp
+        if len(display_rows) > 12:
+            for col_idx in range(n_cols):
+                val = display_rows[12][col_idx] if col_idx < len(display_rows[12]) else "--"
+                bg, fg = _wave_height_colors(val)
+                self._sheet_highlight_cell(12, col_idx, bg=bg, fg=fg)
+
+        # WvPer row (13): violet
+        if len(display_rows) > 13:
+            for col_idx in range(n_cols):
+                self._sheet_highlight_cell(13, col_idx, bg="#160d38", fg="#b090e8")
+
+    def _transpose_for_display(self, rows: list[tuple]) -> tuple[list[str], list[list]]:
+        """Transpose N×14 passage rows into 14×N display rows (labels go in the row index).
+
+        Returns:
+            time_headers  — HH:MM strings used as sheet column headers
+            display_rows  — display_rows[i] = [val_t0, val_t1, ...]  (no label in col 0)
+        """
+        if not rows:
+            return [], [[] for _ in ROW_LABELS]
+        time_headers = [str(row[0])[-5:] for row in rows]
+        display_rows = []
+        for field_idx in range(len(ROW_LABELS)):
+            values = [
+                str(rows[step_idx][field_idx]) if field_idx < len(rows[step_idx]) else "--"
+                for step_idx in range(len(rows))
+            ]
+            display_rows.append(values)
+        return time_headers, display_rows
+
+    def _update_sheet_headers(self, time_headers: list[str]) -> None:
+        """Set sheet column headers: one per timestep (labels are in the row index)."""
+        headers = time_headers
+        try:
+            self.plan_sheet.headers(headers)
+        except Exception:
+            try:
+                self.plan_sheet.set_headers(headers)
+            except Exception:
+                pass
+
+    def _update_row_index(self, n_rows: int) -> None:
+        """Populate the frozen row index panel with field labels."""
+        labels = ROW_LABELS[:n_rows]
+        try:
+            self.plan_sheet.row_index(labels)
+        except Exception:
+            try:
+                self.plan_sheet.set_index_data(labels)
+            except Exception:
+                pass
 
     def build_passage_rows(self, waypoints: list[dict], departure_utc: datetime, speed_kn: float) -> list[tuple]:
         if len(waypoints) < 2:
@@ -511,10 +736,13 @@ class PassagePlanningTool(VNCToolWindow):
             return "--", "--", "--", "--", "--"
         try:
             w = self.grib_reader.wind_at(lat, lon, time_utc, course_deg, speed_kn)
-            twa_str = f"{'+' if w.twa_deg >= 0 else ''}{w.twa_deg:.0f}°"
-            awa_str = f"{'+' if w.awa_deg >= 0 else ''}{w.awa_deg:.0f}°"
+            twd_dir = relative_angle_arrow16(w.twd_deg)   # absolute bearing, +180 gives travel dir
+            twa_dir = relative_angle_arrow16(w.twa_deg)
+            awa_dir = relative_angle_arrow16(w.awa_deg)
+            twa_str = f"{'+' if w.twa_deg >= 0 else ''}{w.twa_deg:.0f}° {twa_dir}"
+            awa_str = f"{'+' if w.awa_deg >= 0 else ''}{w.awa_deg:.0f}° {awa_dir}"
             return (
-                f"{w.twd_deg:.0f}°",
+                f"{w.twd_deg:.0f}° {twd_dir}",
                 f"{w.tws_kn:.1f}",
                 twa_str,
                 f"{w.aws_kn:.1f}",
@@ -522,6 +750,47 @@ class PassagePlanningTool(VNCToolWindow):
             )
         except Exception:
             return "--", "--", "--", "--", "--"
+
+    def _load_last_grib_path(self) -> Path | None:
+        """Return saved GRIB path if it exists and still points to a file."""
+        try:
+            saved = self._last_grib_path_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+
+        if not saved:
+            return None
+
+        path = Path(saved)
+        if path.is_file():
+            return path
+        return None
+
+    def _save_last_grib_path(self, path: str) -> None:
+        """Persist most recently selected/loaded GRIB path for next app launch."""
+        try:
+            self._last_grib_path_file.write_text(path.strip(), encoding="utf-8")
+        except OSError:
+            # Path persistence is non-critical; ignore write failures.
+            pass
+
+    def set_fullscreen(self) -> None:
+        """Maximize/fullscreen for launcher use across different Tk backends."""
+        try:
+            self.attributes("-fullscreen", True)
+            return
+        except tk.TclError:
+            pass
+
+        try:
+            self.attributes("-zoomed", True)
+            return
+        except tk.TclError:
+            pass
+
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        self.geometry(f"{sw}x{sh}+0+0")
 
     def _wave_columns(self, lat: float, lon: float, time_utc: datetime, course_deg: float) -> tuple[str, str, str, str]:
         """Return (wv_dir, wv_ang, wv_ht, wv_per) strings, allowing partial wave GRIBs."""
@@ -579,12 +848,10 @@ class PassagePlanningTool(VNCToolWindow):
                 return (
                     time_utc.strftime("%Y-%m-%d %H:%M"),
                     f"{start_name}->{end_name}",
-                    f"{lat:.4f}",
-                    f"{lon:.4f}",
-                    f"{segment['bearing_deg']:.0f}°",
                     f"{run_nm:.1f}",
                     f"{max(0.0, total_nm - run_nm):.1f}",
-                    twd, tws, twa, aws, awa,
+                    f"{segment['bearing_deg']:.0f}° {compass_arrow16(segment['bearing_deg'])}",
+                    twd, twa, awa, tws, aws,
                     wvdir, wvang, wvht, wvper,
                 )
 
@@ -597,12 +864,10 @@ class PassagePlanningTool(VNCToolWindow):
         return (
             time_utc.strftime("%Y-%m-%d %H:%M"),
             end_name,
-            f"{lat:.4f}",
-            f"{lon:.4f}",
-            f"{final['bearing_deg']:.0f}°",
             f"{total_nm:.1f}",
             "0.0",
-            twd, tws, twa, aws, awa,
+            f"{final['bearing_deg']:.0f}° {compass_arrow16(final['bearing_deg'])}",
+            twd, twa, awa, tws, aws,
             wvdir, wvang, wvht, wvper,
         )
 
@@ -685,8 +950,8 @@ class PassagePlanningTool(VNCToolWindow):
         grib_end    = self.grib_reader.valid_times[-1]
         grib_span_h = (grib_end - grib_start).total_seconds() / 3600.0
 
-        self._slider_label_left.config(text=grib_start.strftime("%Y-%m-%d %H:%MZ"))
-        self._slider_label_right.config(text=grib_end.strftime("%Y-%m-%d %H:%MZ"))
+        self._slider_label_left.config(text=_friendly_departure(grib_start))
+        self._slider_label_right.config(text=f"GRIB ends {grib_end.strftime('%a %d %b %H:%M')}")
 
         w = c.winfo_width()
         h = c.winfo_height()
@@ -724,6 +989,11 @@ class PassagePlanningTool(VNCToolWindow):
             )
             # Departure label inside thumb
             dep_str = self.departure_var.get().strip()[-5:]  # HH:MM
+            try:
+                dep_dt = datetime.strptime(self.departure_var.get().strip(), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                dep_str = _friendly_departure(dep_dt)
+            except ValueError:
+                pass
             c.create_text(
                 thumb_x + thumb_w // 2, h // 2,
                 text=dep_str, fill="white", font=("Arial", 9, "bold"),
@@ -851,6 +1121,30 @@ class PassagePlanningTool(VNCToolWindow):
         if hasattr(self.plan_sheet, "highlight_cells_at"):
             self.plan_sheet.highlight_cells_at(row=row, column=column, bg=bg, fg=fg)
 
+    def _sheet_highlight_index_cell(self, row: int, bg: str, fg: str) -> None:
+        """Highlight a cell in the frozen row index panel."""
+        if hasattr(self.plan_sheet, "highlight_cells"):
+            try:
+                self.plan_sheet.highlight_cells(
+                    row=row,
+                    canvas="row_index",
+                    bg=bg,
+                    fg=fg,
+                    redraw=False,
+                )
+                return
+            except TypeError:
+                try:
+                    self.plan_sheet.highlight_cells(
+                        row=row,
+                        canvas="row_index",
+                        bg=bg,
+                        fg=fg,
+                    )
+                    return
+                except TypeError:
+                    pass
+
     def _sheet_redraw(self) -> None:
         """Request a redraw across tksheet versions."""
         if hasattr(self.plan_sheet, "redraw"):
@@ -860,5 +1154,8 @@ class PassagePlanningTool(VNCToolWindow):
 
 
 if __name__ == "__main__":
+    full_screen = "--fullscreen" in sys.argv
     app = PassagePlanningTool()
+    if full_screen:
+        app.set_fullscreen()
     app.mainloop()
