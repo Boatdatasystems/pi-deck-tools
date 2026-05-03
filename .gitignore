@@ -25,6 +25,7 @@ data/*.grib
 data/*.grib2
 data/*.idx
 .last_grib_path
+*.gpx
 
 # IDE
 .vscode/settings.json

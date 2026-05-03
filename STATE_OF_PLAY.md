@@ -98,11 +98,14 @@ Paths used:
 - Wind-speed Beaufort color ramp (TWS/AWS) and wave-height color ramp (WvHt)
 - Compact in-app legend for wind and wave color bands
 - Upwind TWA cells highlighted amber (about −50° to +50°)
+- AWA alert threshold (default 50°) with matching amber highlight
+- TWA alert threshold (default 60°) editable in UI
 - Departure timeline slider with friendly labels (for example: "Leave Monday 5th May at 12:00")
 - GRIB coverage check dialog — warns if ETA exceeds GRIB end, offers adjust/proceed/cancel
 - Last-used GRIB path persistence in `.last_grib_path`
 - OpenCPN launcher mode starts passage planning in fullscreen
 - Table widget: `tksheet` 7.6.0 (with compatibility wrappers for API differences across versions)
+- **Export Planner GPX** button writes GPX 1.1 route file with named waypoints and `opencpn:viz_name=1` (waypoint names visible after import)
 
 **GRIB wave loading notes:**
 - `shortName: "wvdir"` is the wave direction field in XyGrib WW3 files (not `mwd`)
@@ -143,6 +146,8 @@ bash setup_pi_venv.sh        # installs libeccodes, creates .venv, pip installs 
 - [ ] Passage planning: optional map mini-panel with wind barbs/arrows
 - [x] Passage planning: manual Departure UTC entry snaps to nearest GRIB step on Build
 - [x] Wave period column (`mpww`) now shown in table as `WvPer s`
+- [x] Passage planning: Export Planner GPX with named waypoints for OpenCPN import
+- [ ] OpenCPN binary crashing on Pi (`basic_string::_M_construct null not valid`) — unrelated to pi-deck-tools; likely broken package. Workaround: use GPX import instead of direct DB write.
 
 ---
 
