@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.vnc_window import VNCToolWindow
 
