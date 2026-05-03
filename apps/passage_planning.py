@@ -581,13 +581,16 @@ class PassagePlanningTool(VNCToolWindow):
     def _write_planner_gpx(self, output_path: Path, route_name: str, points: list[dict]) -> None:
         """Write GPX 1.1 route points for OpenCPN import."""
         ns = "http://www.topografix.com/GPX/1/1"
+        ocpn_ns = "http://www.opencpn.org"
         ET.register_namespace("", ns)
+        ET.register_namespace("opencpn", ocpn_ns)
 
         gpx = ET.Element(
             f"{{{ns}}}gpx",
             {
                 "version": "1.1",
                 "creator": "pi-deck-tools passage_planning",
+                "xmlns:opencpn": ocpn_ns,
             },
         )
         metadata = ET.SubElement(gpx, f"{{{ns}}}metadata")
@@ -609,6 +612,8 @@ class PassagePlanningTool(VNCToolWindow):
             time_utc = point.get("time_utc")
             if isinstance(time_utc, datetime):
                 ET.SubElement(rtept, f"{{{ns}}}time").text = time_utc.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            ext = ET.SubElement(rtept, f"{{{ns}}}extensions")
+            ET.SubElement(ext, f"{{{ocpn_ns}}}viz_name").text = "1"
 
         tree = ET.ElementTree(gpx)
         tree.write(output_path, encoding="utf-8", xml_declaration=True)
