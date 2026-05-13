@@ -1,0 +1,34 @@
+{
+  "apps": [
+    {
+      "script": "sun_moon.py",
+      "name": "Sun / Moon Navigation",
+      "order": 10,
+      "description": "Rise/set times, altitude, azimuth, declination. Optional PDF almanac."
+    },
+    {
+      "script": "maidenhead.py",
+      "name": "Grid Square",
+      "order": 20,
+      "description": "Calculate Maidenhead locator from Signal K position."
+    },
+    {
+      "script": "hifiberry_volume.py",
+      "name": "HiFiBerry Volume",
+      "order": 30,
+      "description": "Control L/R audio channels via ALSA amixer."
+    },
+    {
+      "script": "backup_utility.py",
+      "name": "Backup Utility",
+      "order": 40,
+      "description": "Two-pane backup manager with rotating snapshots."
+    },
+    {
+      "script": "passage_planning.py",
+      "name": "Passage Planning",
+      "order": 50,
+      "description": "Route analysis with GRIB wind/wave overlay and timeline."
+    }
+  ]
+}

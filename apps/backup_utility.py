@@ -7,7 +7,7 @@ Two-pane backup manager:
 
 Features in v1:
 - Add/remove sources and destinations with notes
-- Manual run to copy sources into timestamped destination folders
+- Manual run to copy sources into a rotating snapshot set (current + history)
 - Optional interval auto-run scheduler
 - JSON config persistence
 """
@@ -15,8 +15,11 @@ Features in v1:
 from __future__ import annotations
 
 import json
+from typing import Callable
 import shutil
+import stat
 import sys
+import threading
 import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,11 +29,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.vnc_window import VNCToolWindow
 
+APP_VERSION = "1.0.0"
+
 
 class BackupUtility(VNCToolWindow):
     def __init__(self) -> None:
         super().__init__(title="Backup Utility", width=1280, height=760)
         self.resizable(True, True)
+        self.minsize(980, 620)
 
         self.config_path = Path(__file__).resolve().parent.parent / "data" / "backup_utility_jobs.json"
         self.sources: list[dict[str, str]] = []
@@ -42,8 +48,13 @@ class BackupUtility(VNCToolWindow):
 
         self.auto_enabled_var = tk.BooleanVar(value=False)
         self.interval_min_var = tk.StringVar(value="60")
+        self.history_count_var = tk.StringVar(value="2")
         self.status_var = tk.StringVar(value="Add sources and destinations, then run backup.")
         self.next_run_var = tk.StringVar(value="Auto: off")
+        self._progress_var = tk.IntVar(value=0)
+        self._progress_label_var = tk.StringVar(value="")
+        self._backup_running = False
+        self._run_btn: tk.Button | None = None
 
         self._build_ui()
         self._load_config()
@@ -55,7 +66,8 @@ class BackupUtility(VNCToolWindow):
         top = tk.Frame(self.content_frame, bg=self.COLOR_BG)
         top.pack(fill=tk.X, pady=(0, 8))
 
-        tk.Button(top, text="Run Backup Now", command=self.run_backup_now, bg="#1f618d", fg="white", padx=12).pack(side=tk.LEFT)
+        self._run_btn = tk.Button(top, text="Run Backup Now", command=self.run_backup_now, bg="#1f618d", fg="white", padx=12)
+        self._run_btn.pack(side=tk.LEFT)
         tk.Checkbutton(
             top,
             text="Auto",
@@ -70,9 +82,40 @@ class BackupUtility(VNCToolWindow):
         ).pack(side=tk.LEFT, padx=(14, 6))
         tk.Label(top, text="Every (min)", bg=self.COLOR_BG, fg=self.COLOR_FG, font=self.font_small).pack(side=tk.LEFT)
         tk.Entry(top, textvariable=self.interval_min_var, width=6, font=self.font_small).pack(side=tk.LEFT, padx=(6, 10))
+        tk.Label(top, text="History", bg=self.COLOR_BG, fg=self.COLOR_FG, font=self.font_small).pack(side=tk.LEFT)
+        tk.Entry(top, textvariable=self.history_count_var, width=4, font=self.font_small).pack(side=tk.LEFT, padx=(6, 10))
         tk.Button(top, text="Save Config", command=self._save_config, bg="#34495e", fg="white", padx=10).pack(side=tk.LEFT)
 
+        tk.Label(top, text=f"v{APP_VERSION}", bg=self.COLOR_BG, fg="#5d7d9a", font=self.font_small).pack(side=tk.RIGHT, padx=(8, 0))
         tk.Label(top, textvariable=self.next_run_var, bg=self.COLOR_BG, fg="#a8d8ff", font=self.font_small).pack(side=tk.RIGHT)
+
+        # Progress bar row — visible at top, always in view
+        progress_frame = tk.Frame(self.content_frame, bg=self.COLOR_BG)
+        progress_frame.pack(fill=tk.X, pady=(0, 4))
+
+        self._progress_bar = ttk.Progressbar(
+            progress_frame, variable=self._progress_var, maximum=100, length=400
+        )
+        self._progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        tk.Label(
+            progress_frame,
+            textvariable=self._progress_label_var,
+            bg=self.COLOR_BG,
+            fg="#a8d8ff",
+            font=self.font_small,
+            anchor="w",
+            width=22,
+        ).pack(side=tk.LEFT)
+
+        tk.Label(
+            self.content_frame,
+            textvariable=self.status_var,
+            bg=self.COLOR_BG,
+            fg="#a8d8ff",
+            font=self.font_small,
+            anchor="w",
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(0, 6))
 
         body = tk.Frame(self.content_frame, bg=self.COLOR_BG)
         body.pack(fill=tk.BOTH, expand=True)
@@ -134,16 +177,6 @@ class BackupUtility(VNCToolWindow):
         tk.Button(rec_controls, text="Open Backup Folder", command=self.open_selected_backup_folder, bg="#34495e", fg="white").pack(side=tk.LEFT)
         tk.Button(rec_controls, text="Clear Records", command=self.clear_records, bg="#a93226", fg="white").pack(side=tk.LEFT, padx=(6, 0))
 
-        tk.Label(
-            self.content_frame,
-            textvariable=self.status_var,
-            bg=self.COLOR_BG,
-            fg="#a8d8ff",
-            font=self.font_small,
-            anchor="w",
-            justify=tk.LEFT,
-        ).pack(fill=tk.X, pady=(4, 0))
-
     def _load_config(self) -> None:
         if not self.config_path.exists():
             return
@@ -176,6 +209,8 @@ class BackupUtility(VNCToolWindow):
 
         interval = payload.get("auto_interval_min", 60)
         self.interval_min_var.set(str(interval))
+        history_count = payload.get("history_count", 2)
+        self.history_count_var.set(str(history_count))
         auto_enabled = bool(payload.get("auto_enabled", False))
         self.auto_enabled_var.set(auto_enabled)
         if auto_enabled:
@@ -188,6 +223,7 @@ class BackupUtility(VNCToolWindow):
             "backup_records": self.backup_records[-200:],
             "auto_enabled": bool(self.auto_enabled_var.get()),
             "auto_interval_min": self._interval_minutes(),
+            "history_count": self._history_count(),
         }
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +239,14 @@ class BackupUtility(VNCToolWindow):
             return max(1, value)
         except (ValueError, AttributeError):
             return 60
+
+    def _history_count(self) -> int:
+        """How many previous snapshots to retain (not counting current)."""
+        try:
+            value = int(self.history_count_var.get().strip())
+            return max(0, min(10, value))
+        except (ValueError, AttributeError):
+            return 2
 
     def _toggle_auto(self) -> None:
         if self.auto_enabled_var.get():
@@ -361,24 +405,112 @@ class BackupUtility(VNCToolWindow):
                 ),
             )
 
-    def _copy_source_to_snapshot(self, source: Path, snapshot_root: Path) -> Path:
+    @staticmethod
+    def _ignore_special_files(src: str, names: list[str]) -> list[str]:
+        """Skip sockets, pipes, block/char devices — things like opencpn-ipc."""
+        skipped = []
+        for name in names:
+            try:
+                mode = Path(src, name).stat().st_mode
+                if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+                    skipped.append(name)
+            except OSError:
+                skipped.append(name)
+        return skipped
+
+    @staticmethod
+    def _count_copyable_files(source: Path) -> int:
+        """Count regular files in source (skipping special files)."""
+        if source.is_file():
+            return 1
+        total = 0
+        for p in source.rglob("*"):
+            try:
+                mode = p.stat().st_mode
+                if stat.S_ISREG(mode):
+                    total += 1
+            except OSError:
+                pass
+        return max(total, 1)
+
+    def _copy_source_to_snapshot(
+        self,
+        source: Path,
+        snapshot_root: Path,
+        on_file_copied: "Callable[[], None] | None" = None,
+    ) -> Path:
         snapshot_root.mkdir(parents=True, exist_ok=True)
         target_name = source.name if source.name else source.anchor.replace(":", "")
         target = snapshot_root / target_name
 
+        def _copy_with_callback(src: str, dst: str) -> str:
+            shutil.copy2(src, dst)
+            if on_file_copied:
+                on_file_copied()
+            return dst
+
         if source.is_file():
             shutil.copy2(source, target)
+            if on_file_copied:
+                on_file_copied()
             return target
 
         if source.is_dir():
             if target.exists():
                 shutil.rmtree(target)
-            shutil.copytree(source, target)
+            shutil.copytree(
+                source, target,
+                ignore=self._ignore_special_files,
+                copy_function=_copy_with_callback,
+            )
             return target
 
         raise FileNotFoundError(f"Source not found: {source}")
 
+    def _remove_path(self, path: Path) -> None:
+        if not path.exists():
+            return
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+    def _rotate_destination_snapshots(self, dest_path: Path, keep_previous: int) -> Path:
+        """Rotate snapshots at destination and return writable 'current' snapshot path.
+
+        Layout:
+          current/         <- newest run
+          previous-01/     <- prior run
+          previous-02/ ... <- older runs up to configured history
+        """
+        current = dest_path / "current"
+
+        if keep_previous <= 0:
+            self._remove_path(current)
+            current.mkdir(parents=True, exist_ok=True)
+            return current
+
+        oldest = dest_path / f"previous-{keep_previous:02d}"
+        self._remove_path(oldest)
+
+        for idx in range(keep_previous - 1, 0, -1):
+            src = dest_path / f"previous-{idx:02d}"
+            dst = dest_path / f"previous-{idx + 1:02d}"
+            if src.exists():
+                self._remove_path(dst)
+                src.rename(dst)
+
+        previous_01 = dest_path / "previous-01"
+        if current.exists():
+            self._remove_path(previous_01)
+            current.rename(previous_01)
+
+        current.mkdir(parents=True, exist_ok=True)
+        return current
+
     def run_backup_now(self, is_auto: bool = False) -> None:
+        if self._backup_running:
+            return
         if not self.sources:
             self.show_error("No Sources", "Add at least one source file/folder.")
             return
@@ -386,49 +518,96 @@ class BackupUtility(VNCToolWindow):
             self.show_error("No Destinations", "Add at least one destination folder.")
             return
 
-        run_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        created = 0
+        # Count total files across all sources for progress tracking.
+        total_files = sum(
+            self._count_copyable_files(Path(src["path"]).expanduser())
+            for src in self.sources
+        ) * max(len(self.destinations), 1)
+        total_files = max(total_files, 1)
+
+        self._backup_running = True
+        self._progress_var.set(0)
+        self._progress_label_var.set("0 / 0 files")
+        if self._run_btn:
+            self._run_btn.config(state=tk.DISABLED)
+        self.status_var.set("Backup running...")
+
+        copied_count = [0]
         errors: list[str] = []
+        new_records: list[dict] = []
+        keep_previous = self._history_count()
 
-        for dest in self.destinations:
-            dest_path = Path(dest["path"]).expanduser()
-            try:
-                dest_path.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                errors.append(f"Cannot create destination {dest_path}: {exc}")
-                continue
+        def _on_file_copied() -> None:
+            copied_count[0] += 1
+            pct = int(copied_count[0] * 100 / total_files)
+            self.after(0, lambda p=pct, c=copied_count[0]: (
+                self._progress_var.set(p),
+                self._progress_label_var.set(f"{c} / {total_files} files"),
+            ))
 
-            snapshot_root = dest_path / f"backup-{run_stamp}"
-
-            for src in self.sources:
-                source_path = Path(src["path"]).expanduser()
+        def _worker() -> None:
+            created = 0
+            for dest in self.destinations:
+                dest_path = Path(dest["path"]).expanduser()
                 try:
-                    backup_path = self._copy_source_to_snapshot(source_path, snapshot_root)
-                    self.backup_records.append(
-                        {
-                            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "backup_path": str(backup_path),
-                            "source_path": str(source_path),
-                            "note": src.get("note", "") or dest.get("note", ""),
-                        }
-                    )
-                    created += 1
+                    dest_path.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    errors.append(f"Cannot create destination {dest_path}: {exc}")
+                    continue
+
+                try:
+                    snapshot_root = self._rotate_destination_snapshots(dest_path, keep_previous)
                 except Exception as exc:
-                    errors.append(f"{source_path} -> {snapshot_root}: {exc}")
+                    errors.append(f"Cannot rotate snapshots at {dest_path}: {exc}")
+                    continue
 
-        self.backup_records = self.backup_records[-1000:]
-        self._refresh_records_tree()
-        self._save_config()
+                for src in self.sources:
+                    source_path = Path(src["path"]).expanduser()
+                    try:
+                        backup_path = self._copy_source_to_snapshot(
+                            source_path, snapshot_root, on_file_copied=_on_file_copied
+                        )
+                        new_records.append(
+                            {
+                                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "backup_path": str(backup_path),
+                                "source_path": str(source_path),
+                                "note": src.get("note", "") or dest.get("note", ""),
+                            }
+                        )
+                        created += 1
+                    except Exception as exc:
+                        errors.append(f"{source_path} -> {snapshot_root}: {exc}")
 
-        run_mode = "Auto" if is_auto else "Manual"
-        if errors:
-            first = errors[0]
-            self.status_var.set(f"{run_mode} backup done with errors. Copied: {created}. First error: {first}")
-            if not is_auto:
-                messagebox.showwarning("Backup Completed With Errors", "\n".join(errors[:8]))
-            return
+            self.after(0, lambda: _finish(created))
 
-        self.status_var.set(f"{run_mode} backup complete. Copied {created} item(s) into timestamped backup folders.")
+        def _finish(created: int) -> None:
+            self._backup_running = False
+            if self._run_btn:
+                self._run_btn.config(state=tk.NORMAL)
+            self._progress_var.set(100)
+
+            self.backup_records.extend(new_records)
+            self.backup_records = self.backup_records[-1000:]
+            self._refresh_records_tree()
+            self._save_config()
+
+            run_mode = "Auto" if is_auto else "Manual"
+            if errors:
+                first = errors[0]
+                self._progress_label_var.set("Done (errors)")
+                self.status_var.set(f"{run_mode} backup done with errors. Copied: {created}. First error: {first}")
+                if not is_auto:
+                    messagebox.showwarning("Backup Completed With Errors", "\n".join(errors[:8]))
+                return
+
+            self._progress_label_var.set(f"{copied_count[0]} files")
+            self.status_var.set(
+                f"{run_mode} backup complete. Copied {created} source(s) into 'current' snapshots "
+                f"with {keep_previous} previous version(s) retained."
+            )
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def clear_records(self) -> None:
         if not messagebox.askyesno("Clear Records", "Clear backup output history records?", parent=self):
