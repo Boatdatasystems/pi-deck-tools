@@ -1,0 +1,34 @@
+{
+  "configuration": {
+    "calibrations": [
+      {
+        "path": "navigation.headingMagnetic",
+        "sourceRef": "comp.HC",
+        "period": "6.2831",
+        "mappings": [
+          {
+            "in": 0.49,
+            "out": 0.41
+          },
+          {
+            "in": 1.49,
+            "out": 1.35
+          },
+          {
+            "in": 3.49,
+            "out": 3.31
+          },
+          {
+            "in": 4.53,
+            "out": 4.35
+          },
+          {
+            "in": 5.7421,
+            "out": 5.6025
+          }
+        ]
+      }
+    ]
+  },
+  "enabled": true
+}

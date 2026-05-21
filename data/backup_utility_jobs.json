@@ -1,0 +1,81 @@
+{
+  "sources": [
+    {
+      "path": "/home/pi/.signalk",
+      "note": "entire signalk"
+    },
+    {
+      "path": "/home/pi/.opencpn",
+      "note": "entire opencpn"
+    },
+    {
+      "path": "/home/pi/pi-deck-tools",
+      "note": "Pi deck apps"
+    }
+  ],
+  "destinations": [
+    {
+      "path": "/data/backups",
+      "note": "main pi-deck backup folder location"
+    }
+  ],
+  "backup_records": [
+    {
+      "time": "2026-05-06 13:45:30",
+      "backup_path": "/data/backups/current/.signalk",
+      "source_path": "/home/pi/.signalk",
+      "note": "entire signalk"
+    },
+    {
+      "time": "2026-05-06 13:45:31",
+      "backup_path": "/data/backups/current/.opencpn",
+      "source_path": "/home/pi/.opencpn",
+      "note": "entire opencpn"
+    },
+    {
+      "time": "2026-05-06 13:46:20",
+      "backup_path": "/data/backups/current/pi-deck-tools",
+      "source_path": "/home/pi/pi-deck-tools",
+      "note": "Pi deck apps"
+    },
+    {
+      "time": "2026-05-13 06:31:09",
+      "backup_path": "/data/backups/current/.signalk",
+      "source_path": "/home/pi/.signalk",
+      "note": "entire signalk"
+    },
+    {
+      "time": "2026-05-13 06:31:10",
+      "backup_path": "/data/backups/current/.opencpn",
+      "source_path": "/home/pi/.opencpn",
+      "note": "entire opencpn"
+    },
+    {
+      "time": "2026-05-13 06:31:41",
+      "backup_path": "/data/backups/current/pi-deck-tools",
+      "source_path": "/home/pi/pi-deck-tools",
+      "note": "Pi deck apps"
+    },
+    {
+      "time": "2026-05-16 06:51:02",
+      "backup_path": "/data/backups/current/.signalk",
+      "source_path": "/home/pi/.signalk",
+      "note": "entire signalk"
+    },
+    {
+      "time": "2026-05-16 06:51:03",
+      "backup_path": "/data/backups/current/.opencpn",
+      "source_path": "/home/pi/.opencpn",
+      "note": "entire opencpn"
+    },
+    {
+      "time": "2026-05-16 06:51:46",
+      "backup_path": "/data/backups/current/pi-deck-tools",
+      "source_path": "/home/pi/pi-deck-tools",
+      "note": "Pi deck apps"
+    }
+  ],
+  "auto_enabled": false,
+  "auto_interval_min": 60,
+  "history_count": 2
+}
