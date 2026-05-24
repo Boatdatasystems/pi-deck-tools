@@ -29,6 +29,12 @@
       "name": "Passage Planning",
       "order": 50,
       "description": "Route analysis with GRIB wind/wave overlay and timeline."
+    },
+    {
+      "script": "gqrx_vhf_recorder.py",
+      "name": "GQRX VHF Recorder",
+      "order": 60,
+      "description": "Quickly record Marine VHF Ch11 using GQRX SDR. Auto-starts, tunes, and records."
     }
   ]
 }

@@ -73,6 +73,24 @@
       "backup_path": "/data/backups/current/pi-deck-tools",
       "source_path": "/home/pi/pi-deck-tools",
       "note": "Pi deck apps"
+    },
+    {
+      "time": "2026-05-22 07:28:46",
+      "backup_path": "/data/backups/current/.signalk",
+      "source_path": "/home/pi/.signalk",
+      "note": "entire signalk"
+    },
+    {
+      "time": "2026-05-22 07:28:47",
+      "backup_path": "/data/backups/current/.opencpn",
+      "source_path": "/home/pi/.opencpn",
+      "note": "entire opencpn"
+    },
+    {
+      "time": "2026-05-22 07:29:33",
+      "backup_path": "/data/backups/current/pi-deck-tools",
+      "source_path": "/home/pi/pi-deck-tools",
+      "note": "Pi deck apps"
     }
   ],
   "auto_enabled": false,
