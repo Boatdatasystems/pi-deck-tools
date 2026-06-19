@@ -107,6 +107,20 @@ CHART_DATA_MAX_MAG = 5.0
 # Used by: apps/mcd.py
 MCD_CHECK_INTERVAL_SECONDS = 60
 
+# Default interval (seconds) between re-checking and re-alerting on a
+# critical failure. Much faster than MCD_CHECK_INTERVAL_SECONDS so an
+# ongoing outage keeps sounding rather than waiting a full minute between
+# alerts. This is a DEFAULT — apps/checks/__init__.py's CheckResult has an
+# alert_interval_seconds field so a future mcdash config UI can override
+# this per-check without changing the main loop.
+MCD_ALERT_INTERVAL_SECONDS = 5
+
+# Seconds after mcd starts during which critical alerts (audio + Obsidian
+# transition log) are suppressed, even though checks still run and log
+# normally. Prevents false alerts while other services (SignalK, pypilot,
+# etc.) are still starting up after a reboot.
+MCD_STARTUP_GRACE_SECONDS = 90
+
 # systemd watchdog timeout. Must be > MCD_CHECK_INTERVAL_SECONDS.
 # Set WatchdogSec= to this value in mcd.service.
 # Used by: apps/mcd.py

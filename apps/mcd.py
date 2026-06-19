@@ -4,13 +4,22 @@
 Headless, always-on system health observer for Conachair's Pi.
 Managed by systemd (mcd.service). No GUI dependencies.
 
-Phase 1 behaviour:
-  - Runs a full health check sweep every MCD_CHECK_INTERVAL_SECONDS.
-  - Writes structured results to journald via the standard logger.
-  - At MCD_SUMMARY_HOUR each day, appends a markdown summary to the
-    Obsidian daily note under MCD_OBSIDIAN_VAULT_PATH/MCD_OBSIDIAN_SUBFOLDER.
-  - Sends sd_notify(READY=1) on startup and WATCHDOG=1 each sweep.
+Phase 1 behaviour — two-speed main loop:
+  - The loop ticks every MCD_ALERT_INTERVAL_SECONDS (fast, default 5s).
+  - run_sweep() and check_critical_alerts() run on every tick, so an
+    ongoing critical failure keeps re-alerting at the fast cadence instead
+    of waiting for the next slow sweep.
+  - log_check_results() (journald), sd_notify("WATCHDOG=1"), and the daily
+    Obsidian summary check/write only run every Nth tick, where
+    N = MCD_CHECK_INTERVAL_SECONDS // MCD_ALERT_INTERVAL_SECONDS — i.e. at
+    the slower MCD_CHECK_INTERVAL_SECONDS (default 60s) cadence.
+  - Sends sd_notify(READY=1) on startup.
     Falls back gracefully if python-systemd is not installed (dev machines).
+  - For the first MCD_STARTUP_GRACE_SECONDS after mcd starts, critical
+    alerts (audio + Obsidian transition log) are suppressed, since
+    systemd's After= ordering only guarantees a dependency has started,
+    not that it has finished initializing. Checks still run and log
+    normally during the grace period.
 
 Phase 2+ (not yet implemented):
   - alerting on observed patterns
@@ -36,9 +45,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.config import (
+    MCD_ALERT_INTERVAL_SECONDS,
     MCD_CHECK_INTERVAL_SECONDS,
     MCD_OBSIDIAN_SUBFOLDER,
     MCD_OBSIDIAN_VAULT_PATH,
+    MCD_STARTUP_GRACE_SECONDS,
     MCD_SUMMARY_HOUR,
     MCD_WATCHDOG_SEC,
 )
@@ -110,28 +121,51 @@ def run_sweep() -> list[CheckResult]:
     return results
 
 
-def log_results(results: list[CheckResult], dt: datetime) -> None:
-    """Write each result to journald via the project logger.
+def check_critical_alerts(results: list[CheckResult], dt: datetime, elapsed_seconds: float) -> None:
+    """Play/log audio alerts for critical failures. Runs every fast-loop tick.
 
     dt is the current local time, used to timestamp any critical alert
     start/clear transitions logged to Openplotter/alerts.md.
+
+    elapsed_seconds is the time since mcd started. During the startup
+    grace period (MCD_STARTUP_GRACE_SECONDS), alerting is suppressed but
+    _previous_critical_state is still updated, so that once the grace
+    period ends the state tracking is already correct and won't produce
+    a spurious transition log for something that was already failing
+    throughout the grace window.
+    """
+    in_grace_period = elapsed_seconds < MCD_STARTUP_GRACE_SECONDS
+
+    for r in results:
+        if r.severity != "critical":
+            continue
+
+        if not in_grace_period:
+            if not r.ok:
+                # TODO: once alert_interval_seconds is set by a config layer,
+                # use it here to allow per-check alert cadence instead of firing
+                # on every fast-loop pass.
+                play_critical_alert(r.name)
+                # TODO: notify mcdash once mcdash exists
+
+            previous_ok = _previous_critical_state.get(r.name)
+            first_seen = previous_ok is None
+            transitioned = (not first_seen) and (r.ok != previous_ok)
+            if (first_seen and not r.ok) or transitioned:
+                log_critical_alert_transition(r.name, r.ok, r.detail, dt)
+
+        _previous_critical_state[r.name] = r.ok
+
+
+def log_check_results(results: list[CheckResult]) -> None:
+    """Write each result to journald via the project logger. Runs at the
+    slower MCD_CHECK_INTERVAL_SECONDS cadence.
     """
     for r in results:
         if r.ok:
             logger.info(str(r))
         else:
             logger.warning(str(r))
-            if r.severity == "critical":
-                play_critical_alert(r.name)
-                # TODO: notify mcdash once mcdash exists
-
-        if r.severity == "critical":
-            previous_ok = _previous_critical_state.get(r.name)
-            first_seen = previous_ok is None
-            transitioned = (not first_seen) and (r.ok != previous_ok)
-            if (first_seen and not r.ok) or transitioned:
-                log_critical_alert_transition(r.name, r.ok, r.detail, dt)
-            _previous_critical_state[r.name] = r.ok
 
 
 # ---------------------------------------------------------------------------
@@ -216,30 +250,48 @@ def write_obsidian_summary(results: list[CheckResult], dt: datetime) -> None:
 
 def main(once: bool = False) -> None:
     """Run the daemon. If once=True, do one sweep and exit (for testing)."""
-    logger.info("mcd starting — interval=%ds watchdog=%ds",
-                MCD_CHECK_INTERVAL_SECONDS, MCD_WATCHDOG_SEC)
+    logger.info("mcd starting — alert_interval=%ds check_interval=%ds watchdog=%ds",
+                MCD_ALERT_INTERVAL_SECONDS, MCD_CHECK_INTERVAL_SECONDS, MCD_WATCHDOG_SEC)
     sd_notify("READY=1")
+    start_time = time.monotonic()
+
+    # Number of fast (alert) ticks per slow (check/log) cycle.
+    slow_tick_every = MCD_CHECK_INTERVAL_SECONDS // MCD_ALERT_INTERVAL_SECONDS
 
     last_summary_date: int | None = None  # day-of-year of last summary written
+    iteration = 0
+    grace_period_logged = False
 
     while True:
         local_now = datetime.now()
+        elapsed_seconds = time.monotonic() - start_time
 
-        # --- Run checks ---
+        if elapsed_seconds < MCD_STARTUP_GRACE_SECONDS and not grace_period_logged:
+            logger.debug(
+                "mcd startup grace period active (%ds remaining)",
+                MCD_STARTUP_GRACE_SECONDS - int(elapsed_seconds),
+            )
+            grace_period_logged = True
+
+        # --- Run checks and alert on critical failures (every tick) ---
         results = run_sweep()
-        log_results(results, local_now)
-        sd_notify("WATCHDOG=1")
+        check_critical_alerts(results, local_now, elapsed_seconds)
 
-        # --- Daily Obsidian summary at MCD_SUMMARY_HOUR ---
-        if local_now.hour == MCD_SUMMARY_HOUR and local_now.timetuple().tm_yday != last_summary_date:
-            write_obsidian_summary(results, local_now)
-            last_summary_date = local_now.timetuple().tm_yday
+        # --- Slower-cadence work: journald logging, watchdog, daily summary ---
+        if iteration % slow_tick_every == 0:
+            log_check_results(results)
+            sd_notify("WATCHDOG=1")
+
+            if local_now.hour == MCD_SUMMARY_HOUR and local_now.timetuple().tm_yday != last_summary_date:
+                write_obsidian_summary(results, local_now)
+                last_summary_date = local_now.timetuple().tm_yday
 
         if once:
             logger.info("mcd --once: sweep complete, exiting")
             break
 
-        time.sleep(MCD_CHECK_INTERVAL_SECONDS)
+        iteration += 1
+        time.sleep(MCD_ALERT_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

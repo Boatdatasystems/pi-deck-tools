@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from apps.checks import CheckResult, format_uptime
 
 RAM_PERCENT_FAIL_THRESHOLD = 85
+SWAP_PERCENT_FAIL_THRESHOLD = 25
 
 
 def check_throttle() -> CheckResult:
@@ -87,6 +88,16 @@ def check_ram() -> CheckResult:
     return CheckResult(name="ram", ok=ok, detail=detail, value=mem.percent)
 
 
+def check_swap() -> CheckResult:
+    """Check current swap usage. Fails if usage exceeds SWAP_PERCENT_FAIL_THRESHOLD."""
+    swap = psutil.swap_memory()
+    used_mb = swap.used / (1024 * 1024)
+    total_mb = swap.total / (1024 * 1024)
+    ok = swap.percent <= SWAP_PERCENT_FAIL_THRESHOLD
+    detail = f"{used_mb:.1f} MB / {total_mb:.1f} MB ({swap.percent}%)"
+    return CheckResult(name="swap", ok=ok, detail=detail, value=swap.percent, severity="non-critical")
+
+
 def check_uptime() -> CheckResult:
     """Check system uptime via /proc/uptime. Informational only."""
     try:
@@ -131,4 +142,4 @@ def check_xorg_memory() -> CheckResult:
 
 def check_all() -> list[CheckResult]:
     """Run all hardware health checks. Called by mcd main loop."""
-    return [check_throttle(), check_soc_temp(), check_cpu(), check_ram(), check_uptime(), check_xorg_memory()]
+    return [check_throttle(), check_soc_temp(), check_cpu(), check_ram(), check_swap(), check_uptime(), check_xorg_memory()]

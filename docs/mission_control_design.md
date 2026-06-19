@@ -13,6 +13,7 @@ Recent observations from the boat:
 - **OpenCPN freezes after display sleep.** On a recent passage, OpenCPN appeared frozen after the screen blanked. One CPU core saturated at 100% for about a minute as it caught up on buffered NMEA/SignalK input, then returned to normal. Root cause: DPMS/X11 render path pausing while the input threads keep queueing data. Symptom is benign in isolation but represents a class of "display-stack flakiness" that costs reliability offshore.
 - **Chromium-based dashboards (Brave/Chrome) do not survive long runs.** Memory accumulation, GPU process leaks, and per-tab JS overhead make browser-served instrument panels (KIP, SignalK webapps) unsuitable for multi-day passages on a Pi 5 with 4 GB RAM.
 - **"lightdm RAM creep" refined (2026-06-19):** Process-tree investigation during Phase 1 testing shows `lightdm` itself is negligible (~8 MB). The actual weight sits in its children: `Xorg` (~340 MB after 15h uptime) and whatever runs inside the X session — principally `opencpn` (~640 MB after 15h uptime, accumulating ~10 min CPU/hour). Future RAM-creep alerting should watch the Xorg/OpenCPN process tree specifically, not the lightdm daemon. Not yet clear whether OpenCPN's growth plateaus or is unbounded — needs a longer observation window (ideally a multi-day passage) before drawing conclusions.
+- **Swap usage discovered high (2026-06-19):** `vm.swappiness` was at the Linux default of 60. With htop showing only ~400MB truly free RAM and significant buff/cache, the kernel had already pushed ~1GB into swap (likely SD card/eMMC — much slower than RAM). This is a plausible contributor to the earlier-observed OpenCPN freeze-after-sleep behaviour: if part of OpenCPN's working set had been swapped out, waking it requires reading those pages back from slow storage before it becomes responsive. Fixed by lowering vm.swappiness to 10 (`sudo sysctl vm.swappiness=10`, persisted in /etc/sysctl.conf). mcd now tracks swap usage (`apps/checks/hardware.py: check_swap()`) so this is visible in the daily Obsidian summary going forward, rather than requiring a manual htop check to notice.
 - **No cross-service correlation today.** systemd restarts processes that crash, but there is no layer that recognises patterns ("OpenCPN restart-loop", "lightdm RSS climbing"), applies boat-state-aware policy, or surfaces a single health view.
 - **Manual diagnostics required.** Throttling, thermal events, USB device drops, BLE scanner health, SignalK delta rate — all observable but not currently observed in one place.
 
@@ -238,6 +239,21 @@ Critical alerts trigger an audio alarm (`apps/alerts/audio.py`) in addition
 to surfacing in mcdash. Non-critical issues surface in mcdash only — no
 audio, no Obsidian-summary escalation beyond the normal daily table.
 
+**Two-speed main loop:** critical checks are evaluated and re-alerted every
+`MCD_ALERT_INTERVAL_SECONDS` (5s) so an ongoing outage keeps sounding until
+cleared, while routine journald logging and the daily summary stay on the
+slower `MCD_CHECK_INTERVAL_SECONDS` (60s) cadence. `CheckResult` has an
+`alert_interval_seconds` field as a forward-compatible seam for a future
+mcdash config UI to override alert cadence per check, but it is not yet
+wired into the loop — every check currently uses the global default.
+
+**Startup grace period:** mcd suppresses critical alerts for the first
+`MCD_STARTUP_GRACE_SECONDS` (default 90s) after starting, since systemd's
+`After=` ordering only guarantees a dependency has started, not that it has
+finished initializing and is actually responding — observed directly during
+reboot testing on 2026-06-19, where mcd briefly logged a false
+`pypilot_web` alert transition before the service had finished starting.
+
 ### Per-alert audio file naming convention
 
 Each critical check has its own wav so the watch crew can identify the
@@ -256,6 +272,37 @@ services (pypilot, signalk, opencpn), double beeps for the display stack
 compass, and four rapid high-pitched beeps for `throttle` (hardware
 distress). These are meant to be replaced with louder, more attention-
 grabbing recordings once Phase 2 implementation starts in earnest.
+
+### Audio stack: PipeWire, not raw ALSA
+
+Discovered 2026-06-19 while testing critical alerts against music playback.
+This Pi's audio stack is **PipeWire with PulseAudio compatibility**
+(`pactl info` reports `Server Name: PulseAudio (on PipeWire 1.2.7)`), not
+plain ALSA. This has two practical consequences for anything that needs to
+play sound on this system:
+
+1. **Use `paplay`, not `aplay`.** `aplay` talks to ALSA hardware devices
+   directly and will fail with "Device or resource busy" if PipeWire (or
+   another app such as Clementine) already holds the device. `paplay`
+   goes through PipeWire's mixer, which correctly mixes multiple
+   concurrent streams (alert + music) onto the same output.
+2. **Explicit volume is required to be heard over other audio.** A bare
+   `paplay file.wav` plays at a quiet default per-stream volume — audible
+   in silence but easily masked by music or gqrx. `apps/alerts/audio.py`
+   calls `paplay --volume=65536` (max) so alerts reliably cut through.
+3. **`XDG_RUNTIME_DIR` must be set explicitly for systemd services.**
+   PipeWire's per-user socket lives at `/run/user/<uid>/pulse/native`.
+   Interactive shells have `XDG_RUNTIME_DIR` set automatically by the
+   login session; systemd services do not get this for free. Without it,
+   `paplay` fails immediately with `Connection refused` — silently, since
+   `apps/alerts/audio.py` only logs `FileNotFoundError`/timeout, not a
+   non-zero exit code (a logging gap worth closing). `mcd.service` sets
+   `Environment=XDG_RUNTIME_DIR=/run/user/1000` to fix this. If the `pi`
+   user's UID ever changes, this must be updated to match (`id -u pi`).
+
+This class of bug — alerts silently failing to play under systemd despite
+working fine when run by hand from a terminal — is worth remembering for
+any future Pi service that needs audio output (e.g. the anchor drag alarm).
 
 ### Critical alert transition log
 
@@ -282,5 +329,10 @@ own state, which §5 deliberately rules out.
   generate_beeps.py placeholder generator.
 - 2026-06-19 — Noted observed OpenCPN unresponsiveness when pypilot is
   stopped, flagged for Phase 3 auto-restart policy consideration.
+- 2026-06-19 — Diagnosed and fixed critical alerts being inaudible: the
+  Pi's actual audio stack is PipeWire (with PulseAudio compatibility),
+  not raw ALSA. See "Audio stack" note under Phase 2 — Alert Policy.
 - 2026-06-19 — Added critical alert transition log (Openplotter/alerts.md),
   noted in-memory-only state tracking and its restart implications.
+- 2026-06-19 — Diagnosed high swap usage caused by default
+  vm.swappiness=60; lowered to 10 and added a swap check to mcd.

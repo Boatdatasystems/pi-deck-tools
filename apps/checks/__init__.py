@@ -28,6 +28,10 @@ class CheckResult:
         severity: "critical" or "non-critical". Critical failures trigger an
                 audio alert in addition to surfacing in mcdash. See
                 docs/mission_control_design.md, Phase 2 — Alert Policy.
+        alert_interval_seconds: None means use the default
+                MCD_ALERT_INTERVAL_SECONDS. A future config layer (e.g.
+                mcdash) may set this per check name to override how often
+                a specific failing check re-triggers its alert.
     """
 
     name: str
@@ -36,6 +40,7 @@ class CheckResult:
     value: Any = None
     ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     severity: str = "non-critical"  # "critical" or "non-critical"
+    alert_interval_seconds: int | None = None
 
     def __str__(self) -> str:
         status = "OK" if self.ok else "FAIL"
