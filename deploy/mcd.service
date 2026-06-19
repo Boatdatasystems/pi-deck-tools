@@ -10,6 +10,7 @@ User=pi
 WorkingDirectory=/home/pi/pi-deck-tools
 ExecStart=/home/pi/pi-deck-tools/.venv/bin/python3 apps/mcd.py
 Environment=PYTHONUNBUFFERED=1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

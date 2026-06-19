@@ -23,9 +23,6 @@ logger = get_logger("alerts.audio")
 SOUNDS_DIR = Path("/home/pi/pi-deck-tools/assets/sounds")
 DEFAULT_ALERT_WAV = SOUNDS_DIR / "alert_default.wav"
 
-# ALSA device for aplay. Update here if the card number shifts.
-ALSA_DEVICE = "plughw:CARD=sndrpihifiberry,DEV=0"
-
 
 def _alert_wav_for(check_name: str) -> Path | None:
     """Return the wav path to play for check_name, falling back to default."""
@@ -47,11 +44,11 @@ def _play(check_name: str) -> None:
         return
 
     try:
-        subprocess.run(["aplay", "-D", ALSA_DEVICE, str(wav_path)], capture_output=True, timeout=30)
+        subprocess.run(["paplay", "--volume=65536", str(wav_path)], capture_output=True, timeout=30)
     except FileNotFoundError:
-        logger.warning("aplay not found; skipping audio alert")
+        logger.warning("paplay not found; skipping audio alert")
     except subprocess.TimeoutExpired:
-        logger.warning("aplay timed out playing alert for '%s'", check_name)
+        logger.warning("paplay timed out playing alert for '%s'", check_name)
 
 
 def play_critical_alert(check_name: str) -> None:
