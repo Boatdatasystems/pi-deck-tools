@@ -36,3 +36,10 @@ influxdb-client>=1.41
 cfgrib>=0.9.10
 xarray>=2023.1
 scipy>=1.11
+
+# BLE scanner (apps/ble_scanner.py) — ESP32 boat sensors + Victron devices
+# (SmartShunt, MPPT) to SignalK over UDP. Requires the system Bluetooth
+# adapter (hci1, see hci1-up.service) to be up before this can connect.
+psutil>=5.9
+bleak>=3.0
+victron-ble>=0.9

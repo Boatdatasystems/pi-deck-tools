@@ -137,3 +137,50 @@ MCD_OBSIDIAN_SUBFOLDER = "Openplotter"
 # Hour (24h, local time) at which mcd writes the daily Obsidian summary.
 # Used by: apps/mcd.py
 MCD_SUMMARY_HOUR = 0
+
+# ---------------------------------------------------------------------------
+# BLE scanner (apps/ble_scanner.py)
+# ---------------------------------------------------------------------------
+
+# MAC address of the ESP32 BoatSensor (temp/humidity/voltage beacon).
+# Used by: apps/ble_scanner.py
+ESP32_MAC = "58:8C:81:CA:F4:81"
+
+# SignalK UDP listener address that decoded sensor/Victron readings are
+# forwarded to.
+# Used by: apps/ble_scanner.py
+SIGNALK_IP = "10.42.0.1"
+SIGNALK_PORT = 10119
+
+# Bluetooth adapter used for scanning. Must match the adapter brought up
+# by hci1-up.service (a second, dedicated BLE adapter — the Pi's onboard
+# adapter is left for other uses).
+# Used by: apps/ble_scanner.py
+BT_ADAPTER = "hci1"
+
+# Victron BLE devices to decode, keyed by MAC address. Each entry has:
+#   name: human-readable label used in log output.
+#   key:  the device's Instant Readout encryption key (from the VictronConnect app).
+#   type: "shunt" or "mppt" — selects which parser to use.
+#   tag:  (mppt only) short identifier used in the SignalK path, since
+#         multiple MPPTs report under electrical.solar.<tag>.*.
+# Used by: apps/ble_scanner.py
+VICTRON_DEVICES = {
+    "D4:F1:1E:AC:9F:87": {
+        "name": "BoatyShunt",
+        "key":  "106ca6492744d06008342454c5fe4bb8",
+        "type": "shunt",
+    },
+    "F1:78:DC:43:40:22": {
+        "name": "Boaty guard rails MPPT",
+        "key":  "e52f09105d485dc4ba9ba5d4054e44ec",
+        "type": "mppt",
+        "tag":  "rails",
+    },
+    "E4:A1:1F:2A:35:68": {
+        "name": "Boaty Radar Arch MPPT",
+        "key":  "749d38db2943640ddcfc2a8f9cbe5762",
+        "type": "mppt",
+        "tag":  "arch",
+    },
+}

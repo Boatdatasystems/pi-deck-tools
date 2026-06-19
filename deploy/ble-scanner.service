@@ -1,0 +1,18 @@
+[Unit]
+Description=Boat BLE Scanner - Victron + ESP32 to SignalK
+After=network.target bluetooth.target hci1-up.service
+Wants=bluetooth.target hci1-up.service
+
+[Service]
+Type=simple
+User=pi
+Environment=HOME=/home/pi
+Environment=PYTHONUSERSITE=1
+ExecStart=/home/pi/pi-deck-tools/deploy/ble_scanner_start.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
