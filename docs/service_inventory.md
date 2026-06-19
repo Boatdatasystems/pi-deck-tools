@@ -26,7 +26,7 @@ Loss of any of these has immediate safety or navigational consequences.
 |---|---|---|---|
 | SignalK | `signalk.service` (socket-activated by `signalk.socket`) | `systemctl` + `http` | Data bus for everything. Watch service unit AND HTTP endpoint — socket active does not mean server healthy (see SignalK watch strategy below). |
 | OpenCPN | OpenPlotter-managed, not a raw systemd unit | `psutil` — watch `opencpn` process | Halo Plus radar runs as plugin inside OpenCPN; no separate watch needed. |
-| pypilot | `pypilot.service` | `systemctl` | Spawns ~9 worker processes; watch the parent unit, not individual PIDs. Communicates with motor controller via Arduino Nano on `/dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0`. |
+| pypilot | `pypilot.service` | `systemctl` | Spawns ~9 worker processes; watch the parent unit, not individual PIDs. Communicates with motor controller via Arduino Nano on `/dev/ttyOP_pp` (stable OpenPlotter udev alias for the underlying `/dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0` USB device). |
 | pypilot web | `pypilot_web.service` | `systemctl` | Web UI on port 8000. Health proxy for overall pypilot reachability. |
 | SSH | `ssh.service` | `systemctl` | Recovery path if display stack fails offshore. |
 | NetworkManager | `NetworkManager.service` | `systemctl` | Hotspot / wifi / phone tether. |
@@ -66,11 +66,11 @@ Can be restarted manually without passage risk.
 
 | Device | Path | Why |
 |---|---|---|
-| Arduino Nano (pypilot motor controller) | `/dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0` | CH340 USB-serial adapter. If this disappears, pypilot loses its motor controller — service may still show active while unable to steer. |
+| Arduino Nano (pypilot motor controller) | `/dev/ttyOP_pp` (stable OpenPlotter udev alias; underlying USB identifier is `/dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0`) | CH340 USB-serial adapter. If this disappears, pypilot loses its motor controller — service may still show active while unable to steer. |
 | GPS source | *to confirm — see outstanding* | Silent dropout loses position fix and time discipline (no chrony fallback). |
 | AIS source | *to confirm — see outstanding* | Silent dropout loses collision-avoidance data. |
 
-**Note on pypilot + Arduino:** pypilot's systemd unit may remain `active` even if the Arduino drops off USB, since pypilot handles reconnection internally. The device node check is the reliable signal for hardware presence. Cross-correlate: if `/dev/serial/by-id/usb-1a86_...` disappears but `pypilot.service` is still active, that is an alert condition.
+**Note on pypilot + Arduino:** pypilot's systemd unit may remain `active` even if the Arduino drops off USB, since pypilot handles reconnection internally. The device node check is the reliable signal for hardware presence. Cross-correlate: if `/dev/ttyOP_pp` disappears but `pypilot.service` is still active, that is an alert condition.
 
 ---
 
@@ -79,7 +79,7 @@ Can be restarted manually without passage risk.
 - [x] SignalK unit name: `signalk.service` / `signalk.socket` ✓
 - [x] VNC unit name: `vncserver-x11-serviced.service` ✓
 - [x] chrony: not installed; SignalK is sole time source ✓
-- [x] USB serial `usb-1a86_USB2.0-Serial-if00-port0`: Arduino Nano, pypilot motor controller ✓
+- [x] USB serial `/dev/ttyOP_pp` (alias for `usb-1a86_USB2.0-Serial-if00-port0`): Arduino Nano, pypilot motor controller ✓
 - [ ] GPS source: how does GPS reach SignalK? (Bluetooth, internal UART, USB not yet plugged in?)
 - [ ] AIS source: same question
 - [ ] Signalink/IC-7000: connected to Pi at all, or standalone?

@@ -8,11 +8,8 @@ surfacing in the daily summary.
 
 Devices watched:
     Serial devices (ttyOP aliases — OpenPlotter udev):
-        /dev/ttyOP_gps, /dev/ttyOP_ais, /dev/ttyOP_wind, /dev/ttyOP_comp
-
-    USB devices:
-        /dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0
-            (Arduino Nano, pypilot)
+        /dev/ttyOP_gps, /dev/ttyOP_ais, /dev/ttyOP_wind, /dev/ttyOP_comp,
+        /dev/ttyOP_pp (Arduino Nano, pypilot motor controller)
 """
 
 from __future__ import annotations
@@ -32,10 +29,7 @@ SERIAL_DEVICES = [
     ("ttyOP_ais", "/dev/ttyOP_ais"),
     ("ttyOP_wind", "/dev/ttyOP_wind"),
     ("ttyOP_comp", "/dev/ttyOP_comp"),
-]
-
-USB_DEVICES = [
-    ("arduino_nano", "/dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0"),
+    ("ttyOP_pp", "/dev/ttyOP_pp"),
 ]
 
 
@@ -51,11 +45,6 @@ def check_serial() -> list[CheckResult]:
     return [_check_device(name, path, "critical") for name, path in SERIAL_DEVICES]
 
 
-def check_usb() -> list[CheckResult]:
-    """Check all watched USB devices. All non-critical."""
-    return [_check_device(name, path, "non-critical") for name, path in USB_DEVICES]
-
-
 def check_all() -> list[CheckResult]:
     """Check all watched devices. Called by mcd main loop."""
-    return check_serial() + check_usb()
+    return check_serial()

@@ -225,15 +225,17 @@ Severity split agreed for Phase 2 alerting, implemented as a `severity` field
 - `pypilot`, `signalk`, `signalk_http`, `signalk_position`, `opencpn`,
   `lightdm`, `NetworkManager` down
 - Any `ttyOP_*` device missing (`ttyOP_gps`, `ttyOP_ais`, `ttyOP_wind`,
-  `ttyOP_comp`)
+  `ttyOP_comp`, `ttyOP_pp`)
 - `throttle` non-zero
+- `disk_space` > 85% used (a full disk can silently break SignalK logging,
+  InfluxDB writes, and Obsidian summary writes all at once)
 
 **Non-critical (mcdash only):**
 
 - `pypilot_web`, `influxdb`, `ble-scanner`, `grafana-server`, `vncserver`,
   `ssh` down
 - `ram` > 85%, `cpu` > 90% sustained
-- `arduino_nano` missing
+- `disk_space_data` > 85% used (see "Two-tier disk layout" note below)
 
 Critical alerts trigger an audio alarm (`apps/alerts/audio.py`) in addition
 to surfacing in mcdash. Non-critical issues surface in mcdash only — no
@@ -253,6 +255,23 @@ wired into the loop — every check currently uses the global default.
 finished initializing and is actually responding — observed directly during
 reboot testing on 2026-06-19, where mcd briefly logged a false
 `pypilot_web` alert transition before the service had finished starting.
+
+**Xorg CPU tracking:** the `xorg_ram` check (`apps/checks/hardware.py:
+check_xorg()`) now reports Xorg's summed CPU% alongside its RSS, not just
+RSS. This is specifically to give mcd visibility into the "OpenCPN freezes
+after display sleep" scenario from §1 — the one-core-saturated-for-a-minute
+CPU spike that mcd previously had no way to observe.
+
+**Two-tier disk layout:** the Pi has two separate disks watched at
+different severities. OS and swap live on the SD card (`mmcblk0`, the root
+filesystem `/`), watched as critical `disk_space`
+(`apps/checks/hardware.py: check_disk_space()`) since a full root
+filesystem can take down the OS itself. Application data — InfluxDB,
+the Obsidian vault, etc. — lives on a separate NVMe drive mounted at
+`/data`, watched as non-critical `disk_space_data`
+(`check_disk_space_data()`) since it currently has substantial headroom
+(34% used at initial measurement) and a full `/data` degrades
+logging/Obsidian rather than threatening the OS.
 
 ### Per-alert audio file naming convention
 
@@ -336,3 +355,12 @@ own state, which §5 deliberately rules out.
   noted in-memory-only state tracking and its restart implications.
 - 2026-06-19 — Diagnosed high swap usage caused by default
   vm.swappiness=60; lowered to 10 and added a swap check to mcd.
+- 2026-06-19 — Switched the pypilot Arduino Nano device check to the
+  stable /dev/ttyOP_pp alias and reclassified it as critical, after
+  testing showed unplugging it produced no alert under the prior
+  non-critical severity.
+- 2026-06-19 — Added Xorg CPU% tracking alongside its RSS (renamed
+  check_xorg_memory() to check_xorg()), and added a critical disk_space
+  check.
+- 2026-06-19 — Added a second, non-critical disk_space_data check for the
+  /data NVMe mount, documenting the two-tier SD-card/NVMe disk layout.

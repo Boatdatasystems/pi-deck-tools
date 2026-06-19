@@ -7,6 +7,7 @@ machines) and general CPU/RAM load (via psutil).
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from apps.checks import CheckResult, format_uptime
 
 RAM_PERCENT_FAIL_THRESHOLD = 85
 SWAP_PERCENT_FAIL_THRESHOLD = 25
+DISK_PERCENT_FAIL_THRESHOLD = 85
 
 
 def check_throttle() -> CheckResult:
@@ -120,15 +122,27 @@ def check_uptime() -> CheckResult:
     )
 
 
-def check_xorg_memory() -> CheckResult:
-    """Check Xorg's RSS. Informational only — see docs/mission_control_design.md
-    §1 "lightdm RAM creep" for why this targets Xorg rather than lightdm."""
+def check_xorg() -> CheckResult:
+    """Check Xorg's RSS and CPU usage. Informational only — see
+    docs/mission_control_design.md §1 "lightdm RAM creep" for why this
+    targets Xorg rather than lightdm, and for the OpenCPN-post-sleep CPU
+    spike scenario this CPU% tracking is meant to catch.
+
+    name stays "xorg_ram" for backward compatibility with existing
+    Obsidian history, even though this now reports CPU as well as RSS.
+    """
     total_rss = 0
+    total_cpu_pct = 0.0
     found = False
     for proc in psutil.process_iter(["name"]):
         try:
             if proc.info["name"] == "Xorg":
                 total_rss += proc.memory_info().rss
+                # interval=0.1 blocks for 100ms per Xorg process to measure
+                # CPU% — see apps/checks/process.py: check_opencpn() for the
+                # same tradeoff (a future fix would keep Process objects
+                # alive across sweeps and use cpu_percent(interval=None)).
+                total_cpu_pct += proc.cpu_percent(interval=0.1)
                 found = True
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -136,10 +150,64 @@ def check_xorg_memory() -> CheckResult:
     if not found:
         return CheckResult(name="xorg_ram", ok=True, detail="Xorg not running", value=None)
 
-    mb = total_rss / (1024 * 1024)
-    return CheckResult(name="xorg_ram", ok=True, detail=f"RSS: {mb:.1f} MB", value=float(total_rss))
+    rss_mb = total_rss / (1024 * 1024)
+    detail = f"RSS: {rss_mb:.1f} MB, CPU: {total_cpu_pct}%"
+    value = {"rss_mb": rss_mb, "cpu_percent": total_cpu_pct}
+    return CheckResult(name="xorg_ram", ok=True, detail=detail, value=value)
+
+
+def check_disk_space() -> CheckResult:
+    """Check free space on the root filesystem. Fails if usage exceeds
+    DISK_PERCENT_FAIL_THRESHOLD.
+
+    Critical: a full disk can silently break SignalK logging, InfluxDB
+    writes, and Obsidian summary writes all at once.
+    """
+    total, used, free = shutil.disk_usage("/")
+    total_gb = total / (1024 ** 3)
+    used_gb = used / (1024 ** 3)
+    free_gb = free / (1024 ** 3)
+    percent = used / total * 100
+    ok = percent <= DISK_PERCENT_FAIL_THRESHOLD
+    detail = f"{used_gb:.1f} GB / {total_gb:.1f} GB ({percent:.1f}%) free: {free_gb:.1f} GB"
+    return CheckResult(name="disk_space", ok=ok, detail=detail, value=percent, severity="critical")
+
+
+def check_disk_space_data() -> CheckResult:
+    """Check free space on the /data mount (NVMe — InfluxDB, Obsidian
+    vault, etc.). Fails if usage exceeds DISK_PERCENT_FAIL_THRESHOLD.
+
+    Non-critical: substantial headroom currently (34% used at initial
+    measurement), and a full /data degrades logging/Obsidian rather than
+    threatening the OS itself, unlike a full root filesystem.
+    """
+    try:
+        total, used, free = shutil.disk_usage("/data")
+    except FileNotFoundError:
+        return CheckResult(
+            name="disk_space_data", ok=False, detail="/data not mounted",
+            value=None, severity="non-critical",
+        )
+
+    total_gb = total / (1024 ** 3)
+    used_gb = used / (1024 ** 3)
+    free_gb = free / (1024 ** 3)
+    percent = used / total * 100
+    ok = percent <= DISK_PERCENT_FAIL_THRESHOLD
+    detail = f"{used_gb:.1f} GB / {total_gb:.1f} GB ({percent:.1f}%) free: {free_gb:.1f} GB"
+    return CheckResult(name="disk_space_data", ok=ok, detail=detail, value=percent, severity="non-critical")
 
 
 def check_all() -> list[CheckResult]:
     """Run all hardware health checks. Called by mcd main loop."""
-    return [check_throttle(), check_soc_temp(), check_cpu(), check_ram(), check_swap(), check_uptime(), check_xorg_memory()]
+    return [
+        check_throttle(),
+        check_soc_temp(),
+        check_cpu(),
+        check_ram(),
+        check_swap(),
+        check_uptime(),
+        check_xorg(),
+        check_disk_space(),
+        check_disk_space_data(),
+    ]

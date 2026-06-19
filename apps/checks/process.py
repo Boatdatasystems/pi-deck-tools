@@ -23,8 +23,17 @@ def check_opencpn() -> CheckResult:
         try:
             if proc.info["name"] and "opencpn" in proc.info["name"].lower():
                 uptime = format_uptime(time.time() - proc.create_time())
-                detail = f"running (PID {proc.pid}, up {uptime})"
-                return CheckResult(name="opencpn", ok=True, detail=detail, severity="critical")
+                rss_mb = proc.memory_info().rss / (1024 * 1024)
+                # interval=0.1 blocks for 100ms to measure CPU%, adding real
+                # (if small) latency to every fast-loop sweep. A future fix
+                # is cpu_percent(interval=None) with the Process object kept
+                # alive across sweeps so psutil can use its internal delta
+                # tracking instead — not done here since proc is re-created
+                # fresh each call.
+                cpu_pct = proc.cpu_percent(interval=0.1)
+                detail = f"running (PID {proc.pid}, up {uptime}, RSS {rss_mb:.1f} MB, CPU {cpu_pct}%)"
+                value = {"rss_mb": rss_mb, "cpu_percent": cpu_pct}
+                return CheckResult(name="opencpn", ok=True, detail=detail, value=value, severity="critical")
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return CheckResult(name="opencpn", ok=False, detail="not running", severity="critical")
