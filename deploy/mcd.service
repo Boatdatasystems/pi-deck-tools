@@ -1,0 +1,19 @@
+[Unit]
+Description=Mission Control Daemon (mcd) - Conachair system health observer
+After=signalk.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Type=notify once python-systemd is added so sd_notify is no longer a no-op.
+User=pi
+WorkingDirectory=/home/pi/pi-deck-tools
+ExecStart=/home/pi/pi-deck-tools/.venv/bin/python3 apps/mcd.py
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
