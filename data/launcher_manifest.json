@@ -19,6 +19,12 @@
       "description": "Control L/R audio channels via ALSA amixer."
     },
     {
+      "script": "mcdash_tk.py",
+      "name": "Mission Control",
+      "order": 35,
+      "description": "View mcd's latest system health sweep (manual refresh)."
+    },
+    {
       "script": "backup_utility.py",
       "name": "Backup Utility",
       "order": 40,

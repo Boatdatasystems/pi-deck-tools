@@ -20,6 +20,12 @@ Phase 1 behaviour — two-speed main loop:
     systemd's After= ordering only guarantees a dependency has started,
     not that it has finished initializing. Checks still run and log
     normally during the grace period.
+  - After every fast-loop tick, the full sweep results are written to
+    MCD_STATUS_JSON_PATH as JSON (atomic write). This is the shared data
+    source for mcdash (a planned Tkinter app and Flask web view, both
+    not yet built) — they read this file rather than talking to mcd
+    directly, so status shown is never more than MCD_ALERT_INTERVAL_SECONDS
+    (default 5s) stale.
 
 Phase 2+ (not yet implemented):
   - alerting on observed patterns
@@ -37,6 +43,8 @@ Usage (dev / test):
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -50,6 +58,7 @@ from shared.config import (
     MCD_OBSIDIAN_SUBFOLDER,
     MCD_OBSIDIAN_VAULT_PATH,
     MCD_STARTUP_GRACE_SECONDS,
+    MCD_STATUS_JSON_PATH,
     MCD_SUMMARY_HOUR,
     MCD_WATCHDOG_SEC,
 )
@@ -166,6 +175,59 @@ def log_check_results(results: list[CheckResult]) -> None:
             logger.info(str(r))
         else:
             logger.warning(str(r))
+
+
+# ---------------------------------------------------------------------------
+# JSON status snapshot (for mcdash)
+# ---------------------------------------------------------------------------
+
+def write_status_json(results: list[CheckResult], dt: datetime) -> None:
+    """Write the latest sweep results to MCD_STATUS_JSON_PATH as JSON.
+
+    Runs on every fast-loop tick — this is the shared data source for
+    mcdash (Tkinter and web views), so it must stay no more than
+    MCD_ALERT_INTERVAL_SECONDS stale. Written atomically (temp file +
+    os.replace) so a reader never sees a partial write. This write is a
+    nice-to-have, not safety-critical, so any OSError is logged and
+    swallowed rather than allowed to crash the main loop.
+    """
+    ok_count = sum(1 for r in results if r.ok)
+    fail_count = len(results) - ok_count
+    critical_fail_count = sum(1 for r in results if not r.ok and r.severity == "critical")
+
+    checks = []
+    for r in results:
+        value = r.value
+        if value is not None and not isinstance(value, (str, int, float, bool, dict, list)):
+            value = str(value)
+        checks.append({
+            "name": r.name,
+            "ok": r.ok,
+            "severity": r.severity,
+            "detail": r.detail,
+            "value": value,
+            "ts": r.ts.isoformat(),
+        })
+
+    snapshot = {
+        "updated_at": dt.isoformat(),
+        "summary": {
+            "ok_count": ok_count,
+            "fail_count": fail_count,
+            "critical_fail_count": critical_fail_count,
+        },
+        "checks": checks,
+    }
+
+    path = Path(MCD_STATUS_JSON_PATH)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(snapshot, f, indent=2)
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        logger.warning("Failed to write status JSON to %s: %s", path, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +364,7 @@ def main(once: bool = False) -> None:
         # --- Run checks and alert on critical failures (every tick) ---
         results = run_sweep()
         check_critical_alerts(results, local_now, elapsed_seconds)
+        write_status_json(results, local_now)
 
         # --- Slower-cadence work: journald logging, watchdog, daily summary ---
         if iteration % slow_tick_every == 0:

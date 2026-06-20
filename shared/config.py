@@ -138,6 +138,19 @@ MCD_OBSIDIAN_SUBFOLDER = "Openplotter"
 # Used by: apps/mcd.py
 MCD_SUMMARY_HOUR = 0
 
+# Path mcd writes its latest sweep results to, as JSON, after every fast
+# loop pass. Used by mcdash (Tkinter and web views) to display current
+# status without talking to mcd directly.
+MCD_STATUS_JSON_PATH = "/home/pi/pi-deck-tools/data/mcd_status.json"
+
+# How often apps/mcdash_watcher.py polls MCD_STATUS_JSON_PATH for new
+# critical failures, in seconds. Independent of mcd's own
+# MCD_ALERT_INTERVAL_SECONDS — the watcher only needs to be fast enough
+# that a new popup feels prompt, not fast enough to drive the audio
+# alert cadence (mcd already handles that itself).
+# Used by: apps/mcdash_watcher.py
+MCDASH_WATCHER_POLL_SECONDS = 3
+
 # ---------------------------------------------------------------------------
 # BLE scanner (apps/ble_scanner.py)
 # ---------------------------------------------------------------------------

@@ -273,6 +273,53 @@ the Obsidian vault, etc. — lives on a separate NVMe drive mounted at
 (34% used at initial measurement) and a full `/data` degrades
 logging/Obsidian rather than threatening the OS.
 
+**JSON status snapshot for mcdash:** on every fast-loop pass, mcd writes
+its full sweep results to `MCD_STATUS_JSON_PATH` as JSON (atomic write —
+temp file + `os.replace`). This is the shared data source for mcdash: a
+planned Tkinter app for Pi-local viewing, launched on demand from the
+existing app launcher, plus a Flask web view for other devices on the
+boat's network. Neither consumer is built yet — both will simply read
+this file rather than talking to mcd directly, so status shown is never
+more than `MCD_ALERT_INTERVAL_SECONDS` (default 5s) stale.
+
+**mcdash_watcher and the XDG autostart convention:** `apps/mcdash_tk.py`
+is launched on demand from the app launcher, but critical alerts need a
+popup even when nobody has opened that view. `apps/mcdash_watcher.py`
+fills that gap: a small background app that polls
+`MCD_STATUS_JSON_PATH` every `MCDASH_WATCHER_POLL_SECONDS` and pops up an
+always-on-top window when a new critical failure appears (not just an
+ongoing one already shown/dismissed). Unlike mcd, this needs a display,
+so it can't run as a headless systemd service — instead it's autostarted
+inside the Pi's desktop (X) session via the XDG autostart convention:
+`deploy/mcdash-watcher.desktop` is the version-controlled source of
+truth, copied to `~/.config/autostart/mcdash-watcher.desktop` as an
+install step (see `deploy/README.md`). Any future similarly
+display-dependent tool should follow the same pattern: systemd for
+headless daemons, XDG autostart for anything needing a window at login.
+
+**Ctrl+Q global keybind for mcdash_tk (Openbox convention):** beyond the
+app launcher, `apps/mcdash_tk.py` can also be opened instantly from
+anywhere in the desktop session via a global Ctrl+Q keybind, since
+checking system health shouldn't require navigating the launcher first.
+This is configured in `~/.config/openbox/lxde-pi-rc.xml`:
+
+```xml
+<keybind key="C-q">
+      <action name="Execute">
+        <command>/home/pi/pi-deck-tools/.venv/bin/python3 /home/pi/pi-deck-tools/apps/mcdash_tk.py</command>
+      </action>
+    </keybind>
+```
+
+`~/.config/openbox/lxde-pi-rc.xml` is a per-user override of
+`/etc/xdg/openbox/lxde-pi-rc.xml` — it had to be created from scratch, as
+no user-level Openbox config previously existed, despite Openbox being
+launched with `--config-file` already pointing at that user path. Like
+the systemd unit and the autostart `.desktop` file, this config lives
+outside the project tree, so the XML block above (not the file itself)
+is the version-controlled source of truth — re-apply it by hand if the
+user config is ever recreated.
+
 **Obsidian-writer crash incident (2026-06-19/20):** an unhandled
 `PermissionError` inside `obsidian_summary_path()`'s `mkdir()` call
 crashed mcd in a tight restart loop overnight — each crash also
@@ -371,6 +418,16 @@ own state, which §5 deliberately rules out.
   noted in-memory-only state tracking and its restart implications.
 - 2026-06-19 — Diagnosed high swap usage caused by default
   vm.swappiness=60; lowered to 10 and added a swap check to mcd.
+- 2026-06-19 — Relocated ble_scanner.py into the project tree
+  (apps/ble_scanner.py), with config extracted to shared/config.py.
+  Attempted to speed up Victron SmartShunt update rate (too slow for
+  windlass current monitoring) via bleak's BlueZ scan_parameters —
+  reverted, as bleak's BlueZ backend does not expose a scan_parameters
+  argument; the option that worked in community reports (ESPHome's
+  native BLE stack scan interval/window) is unrelated to bleak/BlueZ on
+  Linux. Fast windlass current monitoring will instead go through a
+  dedicated ESP32 + current sensor over UDP, sidestepping BLE advertising
+  interval limits entirely — not yet implemented.
 - 2026-06-19 — Switched the pypilot Arduino Nano device check to the
   stable /dev/ttyOP_pp alias and reclassified it as critical, after
   testing showed unplugging it produced no alert under the prior

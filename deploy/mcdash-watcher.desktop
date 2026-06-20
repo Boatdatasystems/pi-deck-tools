@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mission Control Alert Watcher
+Comment=Pops up an alert when mcd reports a new critical failure
+Exec=/home/pi/pi-deck-tools/.venv/bin/python3 /home/pi/pi-deck-tools/apps/mcdash_watcher.py
+Path=/home/pi/pi-deck-tools
+Terminal=false
+X-GNOME-Autostart-enabled=true
