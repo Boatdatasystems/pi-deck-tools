@@ -273,6 +273,22 @@ the Obsidian vault, etc. — lives on a separate NVMe drive mounted at
 (34% used at initial measurement) and a full `/data` degrades
 logging/Obsidian rather than threatening the OS.
 
+**Obsidian-writer crash incident (2026-06-19/20):** an unhandled
+`PermissionError` inside `obsidian_summary_path()`'s `mkdir()` call
+crashed mcd in a tight restart loop overnight — each crash also
+re-triggered the 90s startup grace period (`MCD_STARTUP_GRACE_SECONDS`),
+degrading critical alerting far more than a missed daily summary alone
+would have. Root cause: `/data/Obsidian/Openplotter` had somehow lost its
+write bit (`dr-xr-xr-x` instead of `drwxr-xr-x`); fixed with
+`chmod u+w`. Beyond the immediate permissions fix, this revealed that the
+Obsidian-writing code paths had no defensive exception handling at all,
+despite being explicitly non-critical/nice-to-have functionality.
+`write_obsidian_summary()` and `log_critical_alert_transition()` are now
+each wrapped in a broad `except Exception`, and `main()`'s call site for
+`write_obsidian_summary()` has its own belt-and-suspenders try/except —
+so a similar issue (or any other filesystem problem) degrades to a
+logged error rather than crashing the daemon.
+
 ### Per-alert audio file naming convention
 
 Each critical check has its own wav so the watch crew can identify the
@@ -364,3 +380,8 @@ own state, which §5 deliberately rules out.
   check.
 - 2026-06-19 — Added a second, non-critical disk_space_data check for the
   /data NVMe mount, documenting the two-tier SD-card/NVMe disk layout.
+- 2026-06-20 — Fixed a production crash: an unhandled PermissionError in
+  the daily Obsidian summary writer put mcd into a tight restart loop
+  overnight. Wrapped all Obsidian-writing functions in broad exception
+  handlers so a similar filesystem problem degrades to a logged error
+  instead of crashing the daemon.

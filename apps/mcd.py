@@ -177,37 +177,57 @@ def log_critical_alert_transition(name: str, ok: bool, detail: str, dt: datetime
 
     This is a running incident log, separate from the daily system-health
     summary — only critical checks that change state get a line here.
+
+    The entire body is wrapped in a broad except: this is non-critical,
+    nice-to-have logging, and must never be allowed to crash the daemon.
+    A filesystem problem here (permissions, missing mount, disk full)
+    previously took down mcd in a tight restart loop — see
+    docs/mission_control_design.md, Phase 2 — Alert Policy.
     """
-    alerts_dir = Path(MCD_OBSIDIAN_VAULT_PATH) / "Openplotter"
-    alerts_dir.mkdir(parents=True, exist_ok=True)
-    path = alerts_dir / "alerts.md"
-
-    label = "ALERT CLEAR" if ok else "ALERT START"
-    line = f"- **{label}** `{dt:%Y-%m-%d %H:%M:%S}` — `{name}`: {detail}"
-
     try:
+        alerts_dir = Path(MCD_OBSIDIAN_VAULT_PATH) / "Openplotter"
+        alerts_dir.mkdir(parents=True, exist_ok=True)
+        path = alerts_dir / "alerts.md"
+
+        label = "ALERT CLEAR" if ok else "ALERT START"
+        line = f"- **{label}** `{dt:%Y-%m-%d %H:%M:%S}` — `{name}`: {detail}"
+
         with path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
         logger.info("Critical alert transition logged to %s", path)
-    except OSError as exc:
-        logger.error("Failed to write critical alert transition: %s", exc)
+    except Exception as exc:
+        logger.error("Failed to write critical alert transition: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
 # Obsidian daily summary
 # ---------------------------------------------------------------------------
 
+class ObsidianPathError(Exception):
+    """Raised when the Obsidian summary directory can't be created/accessed."""
+
+
 def obsidian_summary_path(dt: datetime) -> Path:
     """Return the path for dt's daily summary file, under vault/subfolder/YYYY/MM/.
 
     dt is expected to be local time, so the folder/filename date matches the
     date the crew actually experienced rather than the UTC date.
+
+    Raises ObsidianPathError if the directory can't be created (e.g. a
+    permissions problem on the vault mount). Callers must catch this —
+    see write_obsidian_summary(), which wraps this call in a broad
+    except so a filesystem problem here degrades to a logged error
+    rather than crashing the daemon.
     """
     vault = Path(MCD_OBSIDIAN_VAULT_PATH)
     year_dir = dt.strftime("%Y")
     month_dir = dt.strftime("%m")
     day_dir = vault / MCD_OBSIDIAN_SUBFOLDER / year_dir / month_dir
-    day_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        day_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error("Cannot create Obsidian summary directory %s: %s", day_dir, exc)
+        raise ObsidianPathError(f"Cannot create {day_dir}: {exc}") from exc
     filename = dt.strftime("%Y-%m-%d-%a") + ".md"
     return day_dir / filename
 
@@ -216,32 +236,38 @@ def write_obsidian_summary(results: list[CheckResult], dt: datetime) -> None:
     """Append a markdown health summary to the Obsidian daily note.
 
     dt is expected to be local time (see obsidian_summary_path).
+
+    The entire body is wrapped in a broad except: this is non-critical,
+    nice-to-have functionality, and must never be allowed to crash the
+    daemon. A PermissionError from obsidian_summary_path()'s mkdir() call
+    previously escaped uncaught and crashed mcd in a tight restart loop
+    overnight — see docs/mission_control_design.md, Phase 2 — Alert Policy.
     """
-    path = obsidian_summary_path(dt)
-    ok_count = sum(1 for r in results if r.ok)
-    fail_count = len(results) - ok_count
-    overall = "✅ All checks passed" if fail_count == 0 else f"⚠️ {fail_count} check(s) failed"
-
-    lines = [
-        f"## System health — {dt.strftime('%Y-%m-%d %H:%M')}",
-        f"",
-        f"{overall} ({ok_count} ok, {fail_count} failed)",
-        f"",
-        "| Check | Status | Detail |",
-        "|---|---|---|",
-    ]
-    for r in results:
-        status = "✅" if r.ok else "❌"
-        lines.append(f"| `{r.name}` | {status} | {r.detail} |")
-
-    lines += ["", "---", ""]
-
     try:
+        path = obsidian_summary_path(dt)
+        ok_count = sum(1 for r in results if r.ok)
+        fail_count = len(results) - ok_count
+        overall = "✅ All checks passed" if fail_count == 0 else f"⚠️ {fail_count} check(s) failed"
+
+        lines = [
+            f"## System health — {dt.strftime('%Y-%m-%d %H:%M')}",
+            f"",
+            f"{overall} ({ok_count} ok, {fail_count} failed)",
+            f"",
+            "| Check | Status | Detail |",
+            "|---|---|---|",
+        ]
+        for r in results:
+            status = "✅" if r.ok else "❌"
+            lines.append(f"| `{r.name}` | {status} | {r.detail} |")
+
+        lines += ["", "---", ""]
+
         with path.open("a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         logger.info("Obsidian summary written to %s", path)
-    except OSError as exc:
-        logger.error("Failed to write Obsidian summary: %s", exc)
+    except Exception as exc:
+        logger.error("Failed to write Obsidian summary: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +309,14 @@ def main(once: bool = False) -> None:
             sd_notify("WATCHDOG=1")
 
             if local_now.hour == MCD_SUMMARY_HOUR and local_now.timetuple().tm_yday != last_summary_date:
-                write_obsidian_summary(results, local_now)
+                # Belt-and-suspenders: write_obsidian_summary() already
+                # catches everything internally, but this is explicitly
+                # non-critical functionality and must never be allowed to
+                # take down the main loop, even via some future bug.
+                try:
+                    write_obsidian_summary(results, local_now)
+                except Exception as exc:
+                    logger.error("Unexpected error calling write_obsidian_summary: %s", exc, exc_info=True)
                 last_summary_date = local_now.timetuple().tm_yday
 
         if once:
