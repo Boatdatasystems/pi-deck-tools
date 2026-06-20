@@ -236,6 +236,8 @@ Severity split agreed for Phase 2 alerting, implemented as a `severity` field
   `ssh` down
 - `ram` > 85%, `cpu` > 90% sustained
 - `disk_space_data` > 85% used (see "Two-tier disk layout" note below)
+- `ble_data_freshness` stale (see "BLE scanner data freshness" note below —
+  distinct from `ble-scanner` above, which only watches the systemd unit)
 
 Critical alerts trigger an audio alarm (`apps/alerts/audio.py`) in addition
 to surfacing in mcdash. Non-critical issues surface in mcdash only — no
@@ -336,6 +338,42 @@ each wrapped in a broad `except Exception`, and `main()`'s call site for
 so a similar issue (or any other filesystem problem) degrades to a
 logged error rather than crashing the daemon.
 
+**BLE scanner data freshness, confirmed and automated (2026-06-20):** the
+BLE scanner watch strategy in docs/service_inventory.md anticipated this
+exact failure mode — "unit healthy ≠ data flowing" — before it was ever
+observed in practice. It has now been confirmed: an `hci1-up.service`
+restart left `ble-scanner.service` `active` in systemd while producing
+zero data, because bleak's scan session does not survive the underlying
+Bluetooth adapter being cycled. `apps/checks/http.py:
+check_ble_data_freshness()` detects this by querying SignalK for the most
+recent Victron battery voltage timestamp and comparing its age against
+`MCD_BLE_DATA_MAX_AGE_SECONDS` (300s default) — non-critical, since
+battery-monitoring degradation isn't a navigation-critical event.
+
+mcd now also attempts automatic recovery: `apps/mcd.py:
+check_ble_recovery()` runs `sudo systemctl restart ble-scanner.service`
+when this check is failing, subject to `MCD_BLE_RESTART_COOLDOWN_SECONDS`
+(600s default) between attempts so a problem a restart can't actually fix
+(e.g. hci1 itself down) doesn't turn into a restart loop. The whole
+function is wrapped in a broad `except Exception`, same defensive
+principle as the Obsidian-write fix above — a failure here can never
+crash the main loop.
+
+**Sudo prerequisite, not yet confirmed on the Pi:** `mcd.service` runs as
+`User=pi`. For the restart command to actually succeed (rather than fail
+with a permission error every cooldown cycle), `pi` needs a passwordless
+sudo rule scoped to this one command. No existing rule for this has been
+confirmed in `/etc/sudoers.d/` — an admin needs to add one, e.g. via
+`visudo`:
+
+```
+pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart ble-scanner.service
+```
+
+Until that's added, mcd will log permission-denied failures for each
+attempted restart — degrading gracefully (never crashing), but not
+actually fixing the underlying problem either.
+
 ### Per-alert audio file naming convention
 
 Each critical check has its own wav so the watch crew can identify the
@@ -428,6 +466,33 @@ own state, which §5 deliberately rules out.
   Linux. Fast windlass current monitoring will instead go through a
   dedicated ESP32 + current sensor over UDP, sidestepping BLE advertising
   interval limits entirely — not yet implemented.
+- 2026-06-20 — Confirmed via mcd's own journald history (hourly-binned
+  RAM%/swap%/Xorg RSS/OpenCPN RSS, 2026-06-19 06:00 through 2026-06-20
+  08:00) that the long-running RAM creep originally flagged in §1 has
+  two genuinely distinct components, previously conflated:
+  - **Xorg RSS is a real, unbounded leak.** From a clean post-reboot
+    baseline of 103.5 MB at 14:00 on 2026-06-19, RSS climbed almost
+    linearly and continuously for the next 18 hours to 446 MB by 08:00
+    the following morning, with no plateau at any point. Swap usage
+    (0% → 14% over the same window) tracks this climb closely, strongly
+    suggesting Xorg's growth — not OpenCPN's — is what eventually forces
+    the kernel to start swapping.
+  - **OpenCPN's memory behaviour looks normal, not leaky.** RSS grew
+    quickly during the evening's active use (474 MB → 801 MB across
+    ~19:00–22:00), peaked, then declined steadily overnight to 709 MB
+    by 08:00 — consistent with ordinary allocator/cache behaviour during
+    use followed by release once idle, not a leak. The original design
+    doc concern (§1) singled out OpenCPN; this data suggests Xorg is the
+    actual long-term offender and OpenCPN's contribution is transient.
+  - **No clean in-place fix exists.** Restarting lightdm or killing Xorg
+    necessarily closes every windowed application (OpenCPN included) —
+    there is no way to restart just the X server without a full desktop
+    session restart. A scheduled overnight lightdm or full Pi restart is
+    the most likely eventual mitigation, but is being held off until
+    more data confirms the leak rate is consistent across cycles and
+    Xorg doesn't eventually crash outright or plateau at some survivable
+    level on its own. mcd's existing xorg_ram check (RSS + CPU%) is
+    sufficient to keep tracking this without further changes.
 - 2026-06-19 — Switched the pypilot Arduino Nano device check to the
   stable /dev/ttyOP_pp alias and reclassified it as critical, after
   testing showed unplugging it produced no alert under the prior
@@ -442,3 +507,9 @@ own state, which §5 deliberately rules out.
   overnight. Wrapped all Obsidian-writing functions in broad exception
   handlers so a similar filesystem problem degrades to a logged error
   instead of crashing the daemon.
+- 2026-06-20 — Confirmed the anticipated BLE scanner "unit healthy ≠ data
+  flowing" failure mode in practice (hci1-up.service restart left
+  ble-scanner.service active with zero data). Added
+  check_ble_data_freshness() and automatic recovery
+  (check_ble_recovery(), 10-minute cooldown) to mcd; noted the
+  passwordless-sudo prerequisite this needs, not yet confirmed on the Pi.

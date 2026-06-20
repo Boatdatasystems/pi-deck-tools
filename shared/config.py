@@ -151,6 +151,27 @@ MCD_STATUS_JSON_PATH = "/home/pi/pi-deck-tools/data/mcd_status.json"
 # Used by: apps/mcdash_watcher.py
 MCDASH_WATCHER_POLL_SECONDS = 3
 
+# Path to per-check alert overrides, edited via mcdash. mcd reads this
+# file fresh on every fast-loop sweep (cheap — small file, simple parse)
+# so changes take effect within MCD_ALERT_INTERVAL_SECONDS without a
+# restart. Only checks with an explicit override appear in this file —
+# everything else uses its hardcoded default from the check module.
+MCD_ALERT_OVERRIDES_PATH = "/home/pi/pi-deck-tools/data/mcd_alert_overrides.json"
+
+# Max age (seconds) of the most recent Victron battery voltage reading
+# before mcd considers the BLE scanner's data stale and attempts a
+# recovery restart. The scanner process can stay "active" in systemd
+# while producing no data at all if the underlying hci1 Bluetooth
+# adapter is cycled — bleak's scan session does not survive that.
+# Confirmed via manual testing 2026-06-20: hci1-up.service restart left
+# ble-scanner.service "active" with zero data until manually restarted.
+MCD_BLE_DATA_MAX_AGE_SECONDS = 300
+
+# Minimum time between automatic ble-scanner.service restarts, to avoid
+# a restart loop if the underlying problem isn't actually fixed by a
+# simple restart (e.g. hci1 itself is down).
+MCD_BLE_RESTART_COOLDOWN_SECONDS = 600
+
 # ---------------------------------------------------------------------------
 # BLE scanner (apps/ble_scanner.py)
 # ---------------------------------------------------------------------------

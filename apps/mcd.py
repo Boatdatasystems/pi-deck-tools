@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -54,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.config import (
     MCD_ALERT_INTERVAL_SECONDS,
+    MCD_BLE_RESTART_COOLDOWN_SECONDS,
     MCD_CHECK_INTERVAL_SECONDS,
     MCD_OBSIDIAN_SUBFOLDER,
     MCD_OBSIDIAN_VAULT_PATH,
@@ -63,6 +65,7 @@ from shared.config import (
     MCD_WATCHDOG_SEC,
 )
 from shared.logger import get_logger
+from apps.alert_overrides import apply_overrides, load_overrides
 from apps.checks import CheckResult
 from apps.checks.device import check_all as check_devices
 from apps.checks.hardware import check_all as check_hardware
@@ -76,6 +79,18 @@ logger = get_logger("mcd")
 # Last known ok status per critical check name, used to detect alert
 # start/clear transitions across sweeps. Reset on every mcd restart.
 _previous_critical_state: dict[str, bool] = {}
+
+# time.monotonic() of the last audio alert played per critical check
+# name, used to honour each check's effective alert_interval_seconds
+# (default MCD_ALERT_INTERVAL_SECONDS) instead of re-alerting on every
+# fast-loop tick. Reset on every mcd restart, same as the dict above.
+_last_alert_time: dict[str, float] = {}
+
+# time.monotonic() of the last attempted ble-scanner.service auto-restart,
+# used to enforce MCD_BLE_RESTART_COOLDOWN_SECONDS between attempts so a
+# problem a restart can't actually fix doesn't turn into a restart loop.
+# None until the first attempt. Reset on every mcd restart.
+_last_ble_restart_attempt: float | None = None
 
 # ---------------------------------------------------------------------------
 # systemd integration (optional — absent on dev machines)
@@ -130,7 +145,9 @@ def run_sweep() -> list[CheckResult]:
     return results
 
 
-def check_critical_alerts(results: list[CheckResult], dt: datetime, elapsed_seconds: float) -> None:
+def check_critical_alerts(
+    results: list[CheckResult], dt: datetime, elapsed_seconds: float, overrides: dict,
+) -> None:
     """Play/log audio alerts for critical failures. Runs every fast-loop tick.
 
     dt is the current local time, used to timestamp any critical alert
@@ -142,6 +159,17 @@ def check_critical_alerts(results: list[CheckResult], dt: datetime, elapsed_seco
     period ends the state tracking is already correct and won't produce
     a spurious transition log for something that was already failing
     throughout the grace window.
+
+    overrides is the dict loaded by apps.alert_overrides.load_overrides()
+    this tick — used here only to look up a per-check sound_file
+    override (enabled/severity/alert_interval_seconds are already baked
+    into each result by apply_overrides() before this is called).
+
+    A check with enabled=False (its hardcoded default, or via override)
+    is treated the same as being in the grace period: no audio, no
+    transition log, but _previous_critical_state is still updated — so
+    re-enabling it later won't produce a spurious transition for
+    whatever happened while it was disabled.
     """
     in_grace_period = elapsed_seconds < MCD_STARTUP_GRACE_SECONDS
 
@@ -149,13 +177,25 @@ def check_critical_alerts(results: list[CheckResult], dt: datetime, elapsed_seco
         if r.severity != "critical":
             continue
 
-        if not in_grace_period:
+        if not in_grace_period and r.enabled:
             if not r.ok:
-                # TODO: once alert_interval_seconds is set by a config layer,
-                # use it here to allow per-check alert cadence instead of firing
-                # on every fast-loop pass.
-                play_critical_alert(r.name)
+                interval = (
+                    r.alert_interval_seconds
+                    if r.alert_interval_seconds is not None
+                    else MCD_ALERT_INTERVAL_SECONDS
+                )
+                now = time.monotonic()
+                last_played = _last_alert_time.get(r.name)
+                if last_played is None or (now - last_played) >= interval:
+                    sound_file = overrides.get(r.name, {}).get("sound_file")
+                    play_critical_alert(r.name, sound_file)
+                    _last_alert_time[r.name] = now
                 # TODO: notify mcdash once mcdash exists
+            else:
+                # Cleared — forget the last-alert time so a future failure
+                # of this check alerts immediately rather than waiting out
+                # whatever was left of its alert_interval_seconds.
+                _last_alert_time.pop(r.name, None)
 
             previous_ok = _previous_critical_state.get(r.name)
             first_seen = previous_ok is None
@@ -164,6 +204,54 @@ def check_critical_alerts(results: list[CheckResult], dt: datetime, elapsed_seco
                 log_critical_alert_transition(r.name, r.ok, r.detail, dt)
 
         _previous_critical_state[r.name] = r.ok
+
+
+# ---------------------------------------------------------------------------
+# BLE scanner data-freshness auto-recovery
+# ---------------------------------------------------------------------------
+
+def check_ble_recovery(results: list[CheckResult]) -> None:
+    """If ble_data_freshness is failing, attempt a ble-scanner.service
+    restart — subject to MCD_BLE_RESTART_COOLDOWN_SECONDS between
+    attempts. Runs every fast-loop tick.
+
+    ble-scanner.service can stay "active" in systemd while producing
+    zero data if hci1 is cycled underneath it; a plain systemd restart
+    is the known fix. This whole function is wrapped in a broad except:
+    a failure here (e.g. sudo not configured) must never crash the main
+    loop — same defensive principle as the Obsidian-write fix.
+    """
+    global _last_ble_restart_attempt
+
+    try:
+        stale = next((r for r in results if r.name == "ble_data_freshness" and not r.ok), None)
+        if stale is None:
+            return
+
+        now = time.monotonic()
+        if (
+            _last_ble_restart_attempt is not None
+            and (now - _last_ble_restart_attempt) <= MCD_BLE_RESTART_COOLDOWN_SECONDS
+        ):
+            return
+
+        logger.warning(
+            "BLE scanner data stale (%s) — attempting automatic restart of ble-scanner.service",
+            stale.detail,
+        )
+        _last_ble_restart_attempt = now
+
+        result = subprocess.run(
+            ["sudo", "systemctl", "restart", "ble-scanner.service"],
+            timeout=10, capture_output=True,
+        )
+        if result.returncode == 0:
+            logger.info("ble-scanner.service restart succeeded")
+        else:
+            stderr = result.stderr.decode(errors="replace").strip()
+            logger.warning("ble-scanner.service restart failed (exit %d): %s", result.returncode, stderr)
+    except Exception as exc:
+        logger.error("Unexpected error attempting ble-scanner.service restart: %s", exc, exc_info=True)
 
 
 def log_check_results(results: list[CheckResult]) -> None:
@@ -363,7 +451,10 @@ def main(once: bool = False) -> None:
 
         # --- Run checks and alert on critical failures (every tick) ---
         results = run_sweep()
-        check_critical_alerts(results, local_now, elapsed_seconds)
+        overrides = load_overrides()
+        results = apply_overrides(results, overrides)
+        check_critical_alerts(results, local_now, elapsed_seconds, overrides)
+        check_ble_recovery(results)
         write_status_json(results, local_now)
 
         # --- Slower-cadence work: journald logging, watchdog, daily summary ---

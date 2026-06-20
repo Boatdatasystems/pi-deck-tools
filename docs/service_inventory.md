@@ -145,7 +145,20 @@ Two checks:
 1. `systemctl is-failed ble-scanner.service` — catches crashes
 2. Data freshness: query SignalK for a recent Victron battery voltage timestamp. A running scanner that has lost BLE contact still shows `active` in systemd but data goes stale.
 
-Phase 2 freshness check: query `electrical/batteries/*/voltage` and compare `$source.timestamp` against `now − threshold` (suggest 5 min).
+**Implemented 2026-06-20** (`apps/checks/http.py: check_ble_data_freshness()`):
+queries `electrical/batteries/house/voltage` and compares its `timestamp`
+against `now − MCD_BLE_DATA_MAX_AGE_SECONDS` (300s default). This anticipated
+failure mode was confirmed in practice the same day: an `hci1-up.service`
+restart left `ble-scanner.service` `active` with zero data flowing until
+manually restarted — exactly the "unit healthy ≠ data flowing" gap this
+check exists to catch. mcd now also attempts automatic recovery
+(`apps/mcd.py: check_ble_recovery()`): on a stale reading, it runs
+`sudo systemctl restart ble-scanner.service`, subject to a 10-minute
+cooldown (`MCD_BLE_RESTART_COOLDOWN_SECONDS`) so a problem a restart can't
+actually fix (e.g. hci1 itself down) doesn't turn into a restart loop.
+This requires a passwordless sudo rule for the `pi` user — see
+docs/mission_control_design.md, Phase 2 — Alert Policy, for the required
+`/etc/sudoers.d/` entry, which has not yet been confirmed/added on the Pi.
 
 ### pypilot
 

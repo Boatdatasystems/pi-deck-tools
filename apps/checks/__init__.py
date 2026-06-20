@@ -32,6 +32,18 @@ class CheckResult:
                 MCD_ALERT_INTERVAL_SECONDS. A future config layer (e.g.
                 mcdash) may set this per check name to override how often
                 a specific failing check re-triggers its alert.
+        enabled: If False, this check's audio alert and Obsidian
+                transition logging are suppressed entirely, but it still
+                runs and still appears in the journald log and the
+                mcdash status JSON — disabling silences alerting for a
+                known, accepted issue without hiding the check's current
+                status.
+
+    enabled, severity, and alert_interval_seconds may be overridden at
+    runtime by apps/mcd.py before alerting logic runs, via
+    apps/alert_overrides.py: apply_overrides() — check modules remain
+    the source of DEFAULT values; overrides are applied centrally, not
+    inside each check module.
     """
 
     name: str
@@ -41,6 +53,7 @@ class CheckResult:
     ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     severity: str = "non-critical"  # "critical" or "non-critical"
     alert_interval_seconds: int | None = None
+    enabled: bool = True
 
     def __str__(self) -> str:
         status = "OK" if self.ok else "FAIL"
