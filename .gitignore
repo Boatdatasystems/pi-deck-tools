@@ -44,3 +44,6 @@ Thumbs.db
 
 # Generated reports / downloaded catalogs
 celestial_nav_*.pdf
+
+# Local credentials (Pi-only, never tracked)
+influxdb_credentials.json

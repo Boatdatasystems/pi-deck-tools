@@ -108,3 +108,44 @@ journalctl -u mcdash-web -f
 
 ---
 
+## SignalK notification alarm daemon (anchor_alarm)
+
+`anchor_alarm.service` runs `apps/anchor_alarm.py`, watching SignalK
+notification paths (anchor drag today — see
+`SIGNALK_NOTIFICATION_WATCHES` in `shared/config.py`) and sounding an
+audible alert when one fires. It starts after `signalk.service` and
+`network-online.target`, runs as user `pi` from
+`/home/pi/pi-deck-tools`, and restarts automatically on failure — same
+structure as `mcd.service`, but an independent daemon: the two don't
+depend on each other.
+
+### Install
+
+On the Pi, from the repo root:
+
+```bash
+sudo cp deploy/anchor_alarm.service /etc/systemd/system/anchor_alarm.service
+sudo systemctl daemon-reload
+sudo systemctl enable anchor_alarm.service
+sudo systemctl start anchor_alarm.service
+```
+
+Start it manually the first time so you can watch the logs.
+
+### Logs
+
+anchor_alarm logs to journald (via the project logger and
+`StandardOutput=journal` / `StandardError=journal`) — there's no
+separate log file to tail. Follow it live with:
+
+```bash
+journalctl -u anchor_alarm -f
+```
+
+### Notes
+
+- The service is currently `Type=simple`. Once `python-systemd` is added
+  to the venv, switch `anchor_alarm.service` to `Type=notify` so
+  systemd's watchdog actually takes effect.
+- Re-run the install commands above after editing `anchor_alarm.service`
+  to pick up changes, then `sudo systemctl restart anchor_alarm.service`.

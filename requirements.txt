@@ -47,3 +47,7 @@ victron-ble>=0.9
 # Web view for mcdash (apps/mcdash_web.py) — read-only status page served
 # on the boat's hotspot network, viewed from phone/tablet/laptop browsers.
 flask>=3.0
+
+# SignalK notification alarm daemon (apps/anchor_alarm.py, apps/signalk_monitor.py)
+# — async WebSocket client for the SignalK delta stream.
+websockets>=12.0

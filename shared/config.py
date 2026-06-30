@@ -8,6 +8,8 @@ To customise for a different installation, change only this file.
 """
 
 import os
+from dataclasses import dataclass
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Signal K
@@ -230,3 +232,66 @@ VICTRON_DEVICES = {
         "tag":  "arch",
     },
 }
+
+# ---------------------------------------------------------------------------
+# SignalK notification alarms (apps/anchor_alarm.py)
+# ---------------------------------------------------------------------------
+
+# Volume (%) set via pactl while any SignalK notification alarm is
+# active. Same fixed level for every alarm — see
+# SIGNALK_NOTIFICATION_WATCHES for per-alarm sound files.
+SIGNALK_ALARM_VOLUME_PERCENT = 80
+
+ALSA_CARD_NAME = "sndrpihifiberry"
+# ALSA card name for the HiFiBerry DAC's hardware "Digital" mixer
+# control, confirmed via `amixer -c sndrpihifiberry sset Digital`.
+# Independent of and in series with PipeWire's own sink volume.
+
+SIGNALK_ALARM_DIGITAL_VOLUME_PERCENT = 80
+# Level (%) to boost the ALSA Digital mixer to while any SignalK
+# notification alarm is active, so the alarm can be heard above
+# whatever level normal listening has the hardware mixer set to.
+# Restored to its pre-alarm level on clear.
+
+# Pause between repeats of the alarm sound while a notification is in
+# the alarm/emergency state.
+SIGNALK_ALARM_LOOP_GAP_SECONDS = 2
+
+# Atomic JSON snapshot of current alarm state per watch, written on
+# every state transition and connection-status change. Shared data
+# source for a planned mcdash tab — see
+# docs/mission_control_design.md.
+ANCHOR_ALARM_STATUS_JSON_PATH = "data/anchor_alarm_status.json"
+
+# ---------------------------------------------------------------------------
+# InfluxDB (local Pi instance, mcd check history)
+# ---------------------------------------------------------------------------
+
+INFLUXDB_CREDENTIALS_PATH = "influxdb_credentials.json"
+# Path (relative to project root) to the gitignored/stignore'd file
+# containing url/token/org/bucket for the LOCAL InfluxDB instance on
+# this Pi. Not committed or synced — must be created manually per
+# machine that actually needs to write (i.e. only the Pi running
+# mcd; the Windows dev machine doesn't need this file at all).
+
+INFLUXDB_MEASUREMENT_MCD_CHECKS = "mcd_checks"
+# Measurement name for mcd's per-check numeric values.
+
+
+@dataclass(frozen=True)
+class NotificationWatch:
+    """One SignalK notification path to watch for alarm states."""
+    path: str          # delta-style path, e.g. "notifications.navigation.anchor"
+    name: str          # short identifier, used in logs and status JSON keys
+    audio_path: Path   # wav file to loop while this watch is alarming
+
+
+SIGNALK_NOTIFICATION_WATCHES = [
+    NotificationWatch(
+        path="notifications.navigation.anchor",
+        name="anchor_drag",
+        audio_path=Path("/home/pi/pi-deck-tools/assets/sounds/alarm_anchor_drag.wav"),
+    ),
+    # Add further NotificationWatch entries here for future alarms
+    # (e.g. depth, AIS proximity) — no other code changes required.
+]
