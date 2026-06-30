@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pi-deck-tools: headless
 """Mission Control Daemon — mcd.py
 
 Headless, always-on system health observer for Conachair's Pi.
@@ -45,10 +46,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -65,6 +67,7 @@ from shared.config import (
     MCD_WATCHDOG_SEC,
 )
 from shared.logger import get_logger
+from shared.influx_writer import write_check_values
 from apps.alert_overrides import apply_overrides, load_overrides
 from apps.checks import CheckResult
 from apps.checks.device import check_all as check_devices
@@ -298,7 +301,7 @@ def write_status_json(results: list[CheckResult], dt: datetime) -> None:
         })
 
     snapshot = {
-        "updated_at": dt.isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
             "ok_count": ok_count,
             "fail_count": fail_count,
@@ -357,27 +360,83 @@ class ObsidianPathError(Exception):
     """Raised when the Obsidian summary directory can't be created/accessed."""
 
 
+def _diagnose_and_self_heal_permission_error(day_dir: Path, vault: Path) -> None:
+    """On a PermissionError creating day_dir, walk up from day_dir to vault
+    logging (and attempting to fix) any existing ancestor directory that's
+    missing the owner-write bit.
+
+    This is the diagnostic that would have made the 2026-06-20 incident
+    (a stale dr-xr-xr-x ancestor dir crash-looping mcd hourly overnight)
+    immediately obvious from the log alone, rather than requiring manual
+    `ls -ld` archaeology over SSH. The chmod attempt is best-effort: its
+    own failure is logged at warning level and never raised, since we're
+    already in an error path and one failed self-heal attempt must not
+    mask the original error or introduce a new uncaught exception.
+    """
+    ancestors = [day_dir]
+    current = day_dir
+    while current != vault and current.parent != current:
+        current = current.parent
+        ancestors.append(current)
+
+    for ancestor in ancestors:
+        if not ancestor.exists():
+            continue
+        try:
+            ancestor_stat = os.stat(ancestor)
+        except OSError as exc:
+            logger.warning("Could not stat %s while diagnosing permission error: %s", ancestor, exc)
+            continue
+
+        if ancestor_stat.st_mode & stat.S_IWUSR:
+            continue
+
+        logger.error(
+            "Obsidian vault ancestor directory %s is missing owner-write permission (mode %s)",
+            ancestor, oct(ancestor_stat.st_mode & 0o777),
+        )
+        try:
+            os.chmod(ancestor, ancestor_stat.st_mode | stat.S_IWUSR)
+            logger.info("Self-heal: added owner-write permission to %s", ancestor)
+        except OSError as chmod_exc:
+            logger.warning("Self-heal chmod failed for %s: %s", ancestor, chmod_exc)
+
+
 def obsidian_summary_path(dt: datetime) -> Path:
     """Return the path for dt's daily summary file, under vault/subfolder/YYYY/MM/.
 
     dt is expected to be local time, so the folder/filename date matches the
     date the crew actually experienced rather than the UTC date.
 
-    Raises ObsidianPathError if the directory can't be created (e.g. a
-    permissions problem on the vault mount). Callers must catch this —
-    see write_obsidian_summary(), which wraps this call in a broad
-    except so a filesystem problem here degrades to a logged error
-    rather than crashing the daemon.
+    On a PermissionError specifically (not other OSError subtypes — e.g.
+    a genuinely missing mount should still fail fast, not attempt a
+    chmod that will also fail), attempts a diagnostic + best-effort
+    self-heal (see _diagnose_and_self_heal_permission_error) and retries
+    mkdir() once before giving up.
+
+    Raises ObsidianPathError if the directory still can't be created
+    after that. Callers must catch this — see write_obsidian_summary(),
+    which wraps this call in a broad except so a filesystem problem here
+    degrades to a logged error rather than crashing the daemon.
     """
     vault = Path(MCD_OBSIDIAN_VAULT_PATH)
     year_dir = dt.strftime("%Y")
     month_dir = dt.strftime("%m")
     day_dir = vault / MCD_OBSIDIAN_SUBFOLDER / year_dir / month_dir
+
     try:
         day_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        _diagnose_and_self_heal_permission_error(day_dir, vault)
+        try:
+            day_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.error("Cannot create Obsidian summary directory %s: %s", day_dir, exc)
+            raise ObsidianPathError(f"Cannot create {day_dir}: {exc}") from exc
     except OSError as exc:
         logger.error("Cannot create Obsidian summary directory %s: %s", day_dir, exc)
         raise ObsidianPathError(f"Cannot create {day_dir}: {exc}") from exc
+
     filename = dt.strftime("%Y-%m-%d-%a") + ".md"
     return day_dir / filename
 
@@ -456,6 +515,7 @@ def main(once: bool = False) -> None:
         check_critical_alerts(results, local_now, elapsed_seconds, overrides)
         check_ble_recovery(results)
         write_status_json(results, local_now)
+        write_check_values(results)
 
         # --- Slower-cadence work: journald logging, watchdog, daily summary ---
         if iteration % slow_tick_every == 0:

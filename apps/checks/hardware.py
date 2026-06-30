@@ -10,16 +10,22 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
+from collections import deque
 from pathlib import Path
 
 import psutil
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from apps.checks import CheckResult, format_uptime
+from shared.config import MCD_SWAP_TREND_RISE_THRESHOLD, MCD_SWAP_TREND_WINDOW_MINUTES
 
 RAM_PERCENT_FAIL_THRESHOLD = 85
 SWAP_PERCENT_FAIL_THRESHOLD = 25
 DISK_PERCENT_FAIL_THRESHOLD = 85
+
+# (timestamp via time.monotonic(), swap percent) history for check_swap_trend().
+_swap_history: deque[tuple[float, float]] = deque()
 
 
 def check_throttle() -> CheckResult:
@@ -98,6 +104,41 @@ def check_swap() -> CheckResult:
     ok = swap.percent <= SWAP_PERCENT_FAIL_THRESHOLD
     detail = f"{used_mb:.1f} MB / {total_mb:.1f} MB ({swap.percent}%)"
     return CheckResult(name="swap", ok=ok, detail=detail, value=swap.percent, severity="non-critical")
+
+
+def check_swap_trend() -> CheckResult:
+    """Detect sustained swap growth over MCD_SWAP_TREND_WINDOW_MINUTES,
+    complementing check_swap()'s absolute-threshold check. A swap percent
+    that's well under SWAP_PERCENT_FAIL_THRESHOLD can still be a problem
+    if it's climbing steadily — this catches that drift before it crosses
+    the absolute threshold.
+    """
+    now = time.monotonic()
+    percent = psutil.swap_memory().percent
+    _swap_history.append((now, percent))
+
+    window_seconds = MCD_SWAP_TREND_WINDOW_MINUTES * 60
+    while _swap_history and (now - _swap_history[0][0]) > window_seconds:
+        _swap_history.popleft()
+
+    if len(_swap_history) < 2:
+        return CheckResult(
+            name="swap_trend", ok=True, detail="insufficient history",
+            value=None, severity="non-critical",
+        )
+
+    oldest_percent = _swap_history[0][1]
+    rise = round(percent - oldest_percent, 1)
+    window_minutes = round((now - _swap_history[0][0]) / 60)
+
+    if rise > MCD_SWAP_TREND_RISE_THRESHOLD:
+        detail = f"swap risen {rise}pp over {window_minutes} min ({oldest_percent:.1f}% -> {percent:.1f}%)"
+        ok = False
+    else:
+        detail = f"swap stable ({rise:+.1f}pp over {window_minutes} min)"
+        ok = True
+
+    return CheckResult(name="swap_trend", ok=ok, detail=detail, value=rise, severity="non-critical")
 
 
 def check_uptime() -> CheckResult:
@@ -206,6 +247,7 @@ def check_all() -> list[CheckResult]:
         check_cpu(),
         check_ram(),
         check_swap(),
+        check_swap_trend(),
         check_uptime(),
         check_xorg(),
         check_disk_space(),

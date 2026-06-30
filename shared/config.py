@@ -43,6 +43,18 @@ HIFIBERRY_CARD_NAME = "sndrpihifiberry"
 # Used by: shared/logger.py
 LOG_PATH = os.path.expanduser("~/pi-deck-tools.log")
 
+MCD_SWAP_TREND_WINDOW_MINUTES = 120
+# Rolling window, in minutes, over which check_swap_trend() compares
+# oldest vs newest swap percentage to detect sustained drift rather
+# than a momentary spike.
+# Used by: apps/checks/hardware.py
+
+MCD_SWAP_TREND_RISE_THRESHOLD = 10
+# Swap percentage-point rise within MCD_SWAP_TREND_WINDOW_MINUTES that
+# triggers a non-critical alert — tuned from observed real-world drift
+# of ~12pp over 6.75 hours (see data/mem_creep.csv from 2026-06-20).
+# Used by: apps/checks/hardware.py
+
 # ---------------------------------------------------------------------------
 # Passage planning
 # ---------------------------------------------------------------------------
