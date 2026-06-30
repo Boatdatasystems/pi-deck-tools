@@ -84,7 +84,7 @@ If mcdash crashes, supervision must continue. If the dashboard had its own monit
 | `shared/signalk.py` | mcd and mcdash both consume SignalK via this helper |
 | `shared/vnc_window.py` | mcdash extends `VNCToolWindow` for visual consistency |
 | `.venv` + `requirements.txt` | Adds `psutil`, `dbus-python` or `pystemd`, `influxdb-client` |
-| `launch_pi_app.sh` | mcdash launches via existing helper; mcd via systemd (not OpenCPN) |
+| `apps/launcher_menu.py` | mcdash_tk and other user-launched tools are discovered and launched from here; mcd via systemd (not OpenCPN) |
 | docs/ pattern | This file, plus future `mission_control_runbook.md` |
 | Black formatting | Same code style across the project |
 
@@ -313,6 +313,25 @@ This is configured in `~/.config/openbox/lxde-pi-rc.xml`:
     </keybind>
 ```
 
+**Ctrl+L global keybind for launcher_menu (Openbox convention):** the
+same pattern is used to open the app launcher itself instantly from
+anywhere in the desktop session, without needing some other route to
+reach it first. Configured as a second `<keybind>` entry alongside the
+Ctrl+Q one in `~/.config/openbox/lxde-pi-rc.xml`:
+
+```xml
+<keybind key="C-l">
+      <action name="Execute">
+        <command>/home/pi/pi-deck-tools/.venv/bin/python3 /home/pi/pi-deck-tools/apps/launcher_menu.py</command>
+      </action>
+    </keybind>
+```
+
+As with Ctrl+Q, pressing this while launcher_menu.py is already open
+spawns a second window rather than focusing the existing one — accepted
+for the same reason as mcdash: simple `Execute` actions don't do
+window-raise logic, and this hasn't been a problem in practice.
+
 `~/.config/openbox/lxde-pi-rc.xml` is a per-user override of
 `/etc/xdg/openbox/lxde-pi-rc.xml` — it had to be created from scratch, as
 no user-level Openbox config previously existed, despite Openbox being
@@ -513,3 +532,23 @@ own state, which §5 deliberately rules out.
   check_ble_data_freshness() and automatic recovery
   (check_ble_recovery(), 10-minute cooldown) to mcd; noted the
   passwordless-sudo prerequisite this needs, not yet confirmed on the Pi.
+- 2026-06-28 — Added a global Ctrl+L Openbox keybind to open
+  launcher_menu.py from anywhere in the desktop session, mirroring the
+  existing Ctrl+Q/mcdash_tk convention. Also corrected the §4
+  architecture table: launch_pi_app.sh has been removed;
+  apps/launcher_menu.py now performs that role directly.
+- 2026-06-30 — Added `apps/mcdash_web.py`: a third mcdash consumer, a
+  read-only Flask web dashboard served on port 8765. Managed by
+  `deploy/mcdash-web.service` (systemd, `User=pi`, headless). Reachable
+  at `http://10.42.0.1:8765/` from any device on the boat's hotspot
+  network — phone, tablet, or laptop — with no app install and no
+  authentication (private network only). Shows the same master/detail
+  check data as mcdash_tk's Overview tab: a summary line (overall
+  status + "updated Xs ago"), then checks grouped by severity (Critical
+  first, then Non-critical), each with a green/red dot, check name, and
+  detail string. Manual "Refresh" link only — no JavaScript, no polling,
+  no WebSocket. Responsive CSS: stacks detail below check name on narrow
+  viewports, no horizontal scroll on mobile. Reads `MCD_STATUS_JSON_PATH`
+  fresh on every page load (same data source as mcdash_tk and
+  mcdash_watcher). Editing capability remains Tkinter-only via
+  mcdash_tk's Settings tab — mcdash_web is read-only by design.

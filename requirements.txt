@@ -43,3 +43,7 @@ scipy>=1.11
 psutil>=5.9
 bleak>=3.0
 victron-ble>=0.9
+
+# Web view for mcdash (apps/mcdash_web.py) — read-only status page served
+# on the boat's hotspot network, viewed from phone/tablet/laptop browsers.
+flask>=3.0

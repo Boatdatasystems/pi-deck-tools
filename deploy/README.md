@@ -69,3 +69,42 @@ immediately without logging out:
   after editing.
 - Poll interval is `MCDASH_WATCHER_POLL_SECONDS` in `shared/config.py`,
   independent of mcd's own alert cadence.
+
+## Mission Control web dashboard (mcdash_web)
+
+`mcdash-web.service` runs `apps/mcdash_web.py`, a read-only Flask web server
+on port 8765 that serves mcd's current status to any browser on the boat's
+hotspot network. No JavaScript, no authentication — open `http://10.42.0.1:8765/`
+from a phone, tablet, or laptop and see the same check data as mcdash_tk's
+Overview tab.
+
+### Install
+
+On the Pi, from the repo root:
+
+```bash
+sudo cp deploy/mcdash-web.service /etc/systemd/system/mcdash-web.service
+sudo systemctl daemon-reload
+sudo systemctl enable mcdash-web.service
+sudo systemctl start mcdash-web.service
+```
+
+Start it manually the first time so you can watch the logs.
+
+### Logs
+
+```bash
+journalctl -u mcdash-web -f
+```
+
+### Notes
+
+- Port 8765 is hardcoded in `apps/mcdash_web.py` (constant `PORT`). Change it
+  there and re-copy the service file if something else claims that port.
+- The service has `After=mcd.service` but does not `Require=` it — mcdash_web
+  starts independently and shows a "data not available" page gracefully if mcd
+  hasn't written its first snapshot yet.
+- No `XDG_RUNTIME_DIR` needed — this is a headless web server, no audio output.
+
+---
+
