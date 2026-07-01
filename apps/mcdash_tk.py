@@ -3,8 +3,11 @@
 
 Tkinter viewer for mcd's status. Reads the JSON snapshot mcd writes to
 MCD_STATUS_JSON_PATH (see apps/mcd.py: write_status_json()) and displays
-it as a master/detail view. Manual refresh only — no auto-polling, by
-design: open the app, see current state, click Refresh for an update.
+it as a master/detail view. Refresh is manual (click Refresh) except
+for a lightweight background poll that triggers an automatic refresh
+only when critical_fail_count changes — a new failure or one clearing —
+so the view stays current during an incident without a general
+auto-refresh timer running during normal all-OK operation.
 
 Launched on demand from apps/launcher_menu.py, same as any other tool.
 """
@@ -20,7 +23,7 @@ from tkinter import ttk
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from apps.alert_overrides import load_overrides, save_overrides
 from apps.alerts.audio import list_available_sounds, play_critical_alert
-from shared.config import MCD_ALERT_INTERVAL_SECONDS, MCD_STATUS_JSON_PATH
+from shared.config import MCD_ALERT_INTERVAL_SECONDS, MCD_STATUS_JSON_PATH, MCDASH_WATCHER_POLL_SECONDS
 from shared.logger import get_logger
 from shared.vnc_window import VNCToolWindow
 
@@ -41,6 +44,11 @@ class MissionControlDashboard(VNCToolWindow):
 
         self._build_ui()
         self.refresh()
+
+        self._last_critical_count: int | None = None
+        self._poll_after_id: str | None = None
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._poll_for_changes()
 
     def _build_ui(self) -> None:
         notebook = ttk.Notebook(self.content_frame)
@@ -206,6 +214,34 @@ class MissionControlDashboard(VNCToolWindow):
 
         self._populate_settings(checks)
 
+    def _poll_for_changes(self) -> None:
+        """Background poll — refresh only when critical_fail_count changes.
+
+        Not a general auto-refresh timer: during normal all-OK operation
+        the count stays at 0 and this never triggers a refresh. It only
+        fires on a genuine change (new failure or one clearing), so the
+        view stays current during an incident without polling noise the
+        rest of the time.
+        """
+        try:
+            data = json.loads(self.status_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            pass
+        except json.JSONDecodeError:
+            pass
+        else:
+            critical_fail_count = int(data.get("summary", {}).get("critical_fail_count", 0))
+            if self._last_critical_count is not None and critical_fail_count != self._last_critical_count:
+                self.refresh()
+            self._last_critical_count = critical_fail_count
+
+        self._poll_after_id = self.after(MCDASH_WATCHER_POLL_SECONDS * 1000, self._poll_for_changes)
+
+    def _on_close(self) -> None:
+        if self._poll_after_id:
+            self.after_cancel(self._poll_after_id)
+        self.destroy()
+
     def _populate_group(self, label: str, checks: list[dict]) -> None:
         group_id = self.tree.insert("", tk.END, text=f"{label} ({len(checks)})", open=True)
         for check in checks:
@@ -326,13 +362,18 @@ class MissionControlDashboard(VNCToolWindow):
         ).grid(row=row, column=0, sticky="w", padx=4, pady=2)
 
         enabled_var = tk.BooleanVar(value=bool(override.get("enabled", True)))
-        tk.Checkbutton(
+        enabled_btn = tk.Button(
             self._settings_rows_frame,
-            variable=enabled_var,
-            bg=self.COLOR_BG,
-            activebackground=self.COLOR_BG,
-            selectcolor="#1c2833",
-        ).grid(row=row, column=1, padx=4)
+            width=10,
+            fg="white",
+            padx=6,
+            pady=2,
+        )
+        self._style_enabled_btn(enabled_btn, enabled_var.get())
+        enabled_btn.configure(
+            command=lambda n=name, v=enabled_var, b=enabled_btn: self._toggle_enabled(n, v, b)
+        )
+        enabled_btn.grid(row=row, column=1, padx=4)
 
         severity_var = tk.StringVar(value=override.get("severity", default_severity))
         ttk.Combobox(
@@ -389,6 +430,48 @@ class MissionControlDashboard(VNCToolWindow):
             "sound_var": sound_var,
         }
         return row + 1
+
+    @staticmethod
+    def _style_enabled_btn(btn: tk.Button, enabled: bool) -> None:
+        """Set the toggle button's label and colour to match its state."""
+        if enabled:
+            btn.configure(text="✓ Enabled", bg="#27ae60", activebackground="#27ae60")
+        else:
+            btn.configure(text="✗ Muted", bg="#7f8c8d", activebackground="#7f8c8d")
+
+    def _toggle_enabled(self, check_name: str, var: tk.BooleanVar, btn: tk.Button) -> None:
+        """Flip the enabled state for one check and persist it immediately.
+
+        The enabled/muted flag is the field most likely to need a quick
+        change during an incident, so a click saves it straight to
+        mcd_alert_overrides.json without waiting for the bottom Save button.
+        Other fields (severity/interval/sound) still batch through Save.
+        """
+        enabled = not var.get()
+        var.set(enabled)
+        self._style_enabled_btn(btn, enabled)
+
+        overrides = load_overrides()
+        entry = overrides.get(check_name, {})
+        if enabled:
+            # True is the default — omit it, and drop the entry if now empty.
+            entry.pop("enabled", None)
+            if entry:
+                overrides[check_name] = entry
+            else:
+                overrides.pop(check_name, None)
+        else:
+            entry["enabled"] = False
+            overrides[check_name] = entry
+
+        try:
+            save_overrides(overrides)
+            self.settings_status_var.set("Saved")
+        except OSError as exc:
+            logger.error("Failed to save alert overrides: %s", exc, exc_info=True)
+            self.settings_status_var.set(f"Save failed: {exc}")
+
+        self.after(2000, lambda: self.settings_status_var.set(""))
 
     def _preview_sound(self, check_name: str, sound_var: tk.StringVar) -> None:
         sound = sound_var.get()

@@ -503,15 +503,19 @@ own state, which §5 deliberately rules out.
     use followed by release once idle, not a leak. The original design
     doc concern (§1) singled out OpenCPN; this data suggests Xorg is the
     actual long-term offender and OpenCPN's contribution is transient.
-  - **No clean in-place fix exists.** Restarting lightdm or killing Xorg
-    necessarily closes every windowed application (OpenCPN included) —
-    there is no way to restart just the X server without a full desktop
-    session restart. A scheduled overnight lightdm or full Pi restart is
-    the most likely eventual mitigation, but is being held off until
-    more data confirms the leak rate is consistent across cycles and
-    Xorg doesn't eventually crash outright or plateau at some survivable
-    level on its own. mcd's existing xorg_ram check (RSS + CPU%) is
-    sufficient to keep tracking this without further changes.
+  - **Root cause confirmed 2026-06-30**: `xrestop` confirmed client-attributed
+    X resources totalled only ~41MB while Xorg RSS exceeded 500MB — proving
+    the leak was not in any client's pixmaps/GCs but in the kernel-side
+    VC4/DRM driver itself (kernel-level DRM fence/buffer references not
+    being released under `vc4-kms-v3d`, a known upstream class of bug).
+  - **Fix confirmed 2026-06-30**: Upgraded `linux-image-rpi-2712`
+    6.12.87→6.12.93 and `xserver-xorg-core` ...deb12u11→deb12u12.
+    Post-upgrade Xorg RSS remained flat at 97-100MB for 21+ hours of
+    continuous uptime with OpenCPN running (the previous pattern reached
+    400-600MB by hour 18 and continued climbing). The leak appears fully
+    resolved by the kernel/Xorg update — no scheduled lightdm restart
+    mitigation is needed. mcd's xorg_ram check remains in place to
+    detect any regression.
 - 2026-06-19 — Switched the pypilot Arduino Nano device check to the
   stable /dev/ttyOP_pp alias and reclassified it as critical, after
   testing showed unplugging it produced no alert under the prior

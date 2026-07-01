@@ -10,6 +10,7 @@ Generate them with apps/alerts/generate_beeps.py.
 
 from __future__ import annotations
 
+import queue
 import subprocess
 import sys
 import threading
@@ -22,6 +23,31 @@ logger = get_logger("alerts.audio")
 
 SOUNDS_DIR = Path("/home/pi/pi-deck-tools/assets/sounds")
 DEFAULT_ALERT_WAV = SOUNDS_DIR / "alert_default.wav"
+
+
+def play_wav_once(wav_path: Path, timeout: int = 30) -> bool:
+    """Play a single wav file via paplay, blocking until done.
+
+    Uses the same paplay --volume=65536 invocation already proven to
+    work reliably on this hardware (PipeWire/HiFiBerry). Returns True
+    if paplay ran successfully, False if it was missing, timed out,
+    or failed for any other reason. Does not raise.
+    """
+    try:
+        subprocess.run(
+            ["paplay", "--volume=65536", str(wav_path)],
+            capture_output=True, timeout=timeout,
+        )
+        return True
+    except FileNotFoundError:
+        logger.warning("paplay not found; skipping audio alert")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("paplay timed out playing %s", wav_path)
+        return False
+    except Exception:
+        logger.exception("paplay failed playing %s", wav_path)
+        return False
 
 
 def _alert_wav_for(check_name: str, sound_file: str | None = None) -> Path | None:
@@ -53,22 +79,51 @@ def _play(check_name: str, sound_file: str | None = None) -> None:
         )
         return
 
-    try:
-        subprocess.run(["paplay", "--volume=65536", str(wav_path)], capture_output=True, timeout=30)
-    except FileNotFoundError:
-        logger.warning("paplay not found; skipping audio alert")
-    except subprocess.TimeoutExpired:
-        logger.warning("paplay timed out playing alert for '%s'", check_name)
+    play_wav_once(wav_path)
+
+
+# Simultaneous mcd alerts (e.g. several services down after a reboot) used
+# to each get their own thread and play at once, overlapping into
+# unintelligible noise. A single serial queue + worker thread ensures each
+# alert is heard clearly before the next one starts.
+_alert_queue: queue.Queue = queue.Queue()
+_worker_started = False
+
+
+def _alert_worker() -> None:
+    while True:
+        item = _alert_queue.get()
+        if item is None:
+            break  # sentinel for clean shutdown if ever needed
+        check_name, sound_file = item
+        _play(check_name, sound_file)
+        _alert_queue.task_done()
+
+
+def _start_worker() -> None:
+    global _worker_started
+    if _worker_started:
+        return
+    _worker_started = True
+    threading.Thread(target=_alert_worker, daemon=True).start()
+
+
+_start_worker()
 
 
 def play_critical_alert(check_name: str, sound_file: str | None = None) -> None:
-    """Play the alert sound for check_name in a non-blocking background thread.
+    """Queue the alert sound for check_name to play on the serial worker thread.
+
+    Returns immediately (non-blocking from the caller's perspective), but
+    sounds play sequentially rather than overlapping when several alerts
+    fire close together.
 
     sound_file, if given, is an explicit override (filename only, looked
     up in SOUNDS_DIR) that takes priority over the default
     alert_<check_name>.wav / alert_default.wav lookup.
     """
-    threading.Thread(target=_play, args=(check_name, sound_file), daemon=True).start()
+    _start_worker()
+    _alert_queue.put((check_name, sound_file))
 
 
 def list_available_sounds() -> list[str]:

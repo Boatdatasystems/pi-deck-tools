@@ -277,6 +277,20 @@ INFLUXDB_CREDENTIALS_PATH = "influxdb_credentials.json"
 INFLUXDB_MEASUREMENT_MCD_CHECKS = "mcd_checks"
 # Measurement name for mcd's per-check numeric values.
 
+# ---------------------------------------------------------------------------
+# InfluxDB (read-side queries)
+# ---------------------------------------------------------------------------
+
+# Bucket containing SignalK's own data (navigation, wind, electrical,
+# environment, etc.), written by a SignalK-side plugin independent of
+# this project. Confirmed present 2026-06-30 via manual `influx query`.
+INFLUXDB_BUCKET_BOATY = "boatyDb"
+
+# SignalK "self" vessel context tag, used to filter queries to this
+# boat's own data rather than any AIS targets that might also be logged
+# under different context/MMSI tags in the same bucket.
+INFLUXDB_SELF_CONTEXT = "vessels.urn:mrn:imo:mmsi:235090919"
+
 
 @dataclass(frozen=True)
 class NotificationWatch:
